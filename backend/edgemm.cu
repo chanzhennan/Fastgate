@@ -7,6 +7,8 @@
 #include <stdlib.h>
 #include <torch/extension.h>
 
+#include "edgemm.cuh"
+
 void edgemm(at::Tensor A, at::Tensor B, at::Tensor C){
 
     int M = A.size(0);

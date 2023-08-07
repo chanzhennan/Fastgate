@@ -7,6 +7,9 @@
 
 using namespace nvcuda;
 
+#define OFFSET(row, col, ld) ((row) * (ld) + (col))
+#define FLOAT4(pointer) (reinterpret_cast<float4*>(&(pointer))[0])
+
 __global__ void myHGEMMAlignedV5(
     half * __restrict__ a, half * __restrict__ b, half * __restrict__ c,
     const int M, const int N, const int K) {
@@ -40,7 +43,7 @@ __global__ void myHGEMMAlignedV5(
     for (int i = 0; i < 4; i++) {
         #pragma unroll
         for (int j = 0; j < 4; j++) {
-            wmma::fill_fragment(frag_c[i][j], 0.0);
+            wmma::fill_fragment(frag_c[i][j], __float2half(0.0f));
         }
     }
 

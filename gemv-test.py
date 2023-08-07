@@ -1,6 +1,7 @@
 import torch
 import time
-from hgemm.backend import hgemm
+from eed.backend import hgemm
+from triton_mm import matmul as triton_matmul
 
 A = torch.rand((1, 6144), dtype=torch.float16, device='cuda')
 B = torch.rand((6144, 6144 * 4), dtype=torch.float16, device='cuda')
@@ -19,7 +20,16 @@ torch.cuda.cudart().cudaProfilerStop()
 print(C)
 
 all_close = torch.allclose(torch_output, C, rtol=1e-2, atol=1e-4)
-print(all_close)
+print("cublas verse torch: ", all_close)
+
+torch.cuda.cudart().cudaProfilerStart() 
+triton_output = triton_matmul(A, B)
+torch.cuda.cudart().cudaProfilerStop()
+
+print(triton_output)
+
+all_close = torch.allclose(torch_output, triton_output, rtol=1e-2, atol=1e-4)
+print("triton verse torch: ", all_close)
 
 torch_dur = 0
 for _ in range(10):
@@ -45,5 +55,17 @@ for _ in range(100):
     ed = time.time()
     cublas_dur += (ed - st) * 10
 
-print('torch - cublas: %.4f ms - %.4f ms' % (torch_dur, cublas_dur))
+triton_dur = 0
+for _ in range(10):
+    triton_output = triton_matmul(A, B)
+
+for _ in range(100):
+    torch.cuda.synchronize()
+    st = time.time()
+    triton_output = triton_matmul(A, B)
+    torch.cuda.synchronize()
+    ed = time.time()
+    triton_dur += (ed - st) * 10
+
+print('torch - cublas - triton: %.4f ms - %.4f ms - %.4f ms' % (torch_dur, cublas_dur, triton_dur))
 

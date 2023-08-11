@@ -36,3 +36,32 @@ void edgemm(at::Tensor A, at::Tensor B, at::Tensor C){
         M, N, K
         );
 }
+
+
+void edgemm_m8(at::Tensor A, at::Tensor B, at::Tensor C){
+
+    int M = A.size(0);
+    int K = A.size(1);
+    int N = B.size(1);
+
+    const int BM = 8, BN = 256, BK = 32;
+    dim3 blockDim(256);
+    int BX = (N + BN - 1) / BN;
+    int BY = (M + BM - 1) / BM;
+
+    const int NSPLIT = 4096;
+    int split_num = (N + NSPLIT - 1) / NSPLIT;
+    dim3 gridDim((BX + split_num - 1) / split_num, BY, split_num);
+
+    cudaFuncSetAttribute(eed_hgemm_m8n256k32,
+                cudaFuncAttributeMaxDynamicSharedMemorySize, 98304);
+
+    unsigned int dsmem = 2 * (BM * (8 * BK + 8) + BK * (BN + 8)) * sizeof(half);
+    
+    eed_hgemm_m8n256k32<<<gridDim, blockDim, dsmem>>>(
+        reinterpret_cast<half *>(A.data_ptr<at::Half>()),  
+        reinterpret_cast<half *>(B.data_ptr<at::Half>()), 
+        reinterpret_cast<half *>(C.data_ptr<at::Half>()),  
+        M, N, K
+        );
+}

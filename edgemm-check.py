@@ -1,16 +1,17 @@
 import torch
 import time
-from eed.backend import edgemm_m8
+from eed.backend import edgemm, edgemm_m8n128k64, edgemm_m8n256k64
 
-A = torch.rand((8, 4096), dtype=torch.float16, device='cuda')
-B = torch.rand((4096, 4096 * 3), dtype=torch.float16, device='cuda')
+A = torch.rand((128, 12288 * 4), dtype=torch.float16, device='cuda')
+B = torch.rand((12288 * 4, 12288), dtype=torch.float16, device='cuda')
+B[:, -4:-2] = B[:, -4:-2] / 100
 
 torch_output = torch.matmul(A, B)
 print(torch_output)
 
-C = torch.zeros((8, 4096 * 3), dtype=torch.float16, device='cuda')
+C = torch.zeros((128, 12288), dtype=torch.float16, device='cuda')
 
-edgemm_m8(A, B, C)
+edgemm(A, B, C)
 print(C)
 
 all_close = torch.allclose(torch_output, C, rtol=1e-1, atol=1e-2)
@@ -30,12 +31,12 @@ for _ in range(100):
 
 edgemm_dur = 0
 for _ in range(10):
-    edgemm_m8(A, B, C)
+    edgemm(A, B, C)
 
 for _ in range(100):
     torch.cuda.synchronize()
     st = time.time()
-    edgemm_m8(A, B, C)
+    edgemm(A, B, C)
     torch.cuda.synchronize()
     ed = time.time()
     edgemm_dur += (ed - st) * 10

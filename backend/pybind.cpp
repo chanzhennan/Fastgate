@@ -7,6 +7,8 @@
 #include "fastgemv.h"
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m){
+  m.def("edgemm_m8n128k64x4", &edgemm_m8n128k64x4);
+  m.def("edgemv_m1n128k64x4", &edgemv_m1n128k64x4);
   m.def("edgemm_m8n128k128", &edgemm_m8n128k128);
   m.def("edgemm_m8n128k64", &edgemm_m8n128k64);
   m.def("edgemm_m8n256k64", &edgemm_m8n256k64);

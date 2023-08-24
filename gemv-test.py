@@ -4,8 +4,8 @@ from eed.backend import hgemm, fastgemv
 from triton_mm import matmul as triton_matmul
 
 M = 1
-K = 1024 * 4
-N = 1024
+K = 8192
+N = 8192
 
 A = torch.rand((M, K), dtype=torch.float16, device='cuda')
 B = torch.rand((K, N), dtype=torch.float16, device='cuda')
@@ -84,6 +84,7 @@ for _ in range(10):
 for _ in range(100):
     torch.cuda.synchronize()
     st = time.time()
+    _ = torch.empty((M, N), dtype=torch.float16, device='cuda')
     hgemm(A, B, C)
     torch.cuda.synchronize()
     ed = time.time()
@@ -105,11 +106,12 @@ for _ in range(100):
 ###########################################
 fastgemv_dur = 0
 for _ in range(10):
-    hgemm(A, B, C)
+    fastgemv(B_T, A_T, C_T)
 
 for _ in range(100):
     torch.cuda.synchronize()
     st = time.time()
+    _ = torch.empty((N, M), dtype=torch.float16, device='cuda')
     fastgemv(B_T, A_T, C_T)
     torch.cuda.synchronize()
     ed = time.time()

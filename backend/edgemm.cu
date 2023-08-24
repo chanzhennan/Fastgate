@@ -172,7 +172,7 @@ void edgemv_m1n128k64x4(at::Tensor A, at::Tensor B, at::Tensor C){
     dim3 blockDim(128);
     int BX = (N + BN - 1) / BN;
     int BY = 1;
-    int BZ = 4;
+    int BZ = 8;
 
     dim3 gridDim(BX, BY, BZ);
 
@@ -183,7 +183,37 @@ void edgemv_m1n128k64x4(at::Tensor A, at::Tensor B, at::Tensor C){
     // about 39 KB for m8n128k64
     unsigned int dsmem = (2 * (BM * (2 * BK + 8) + BK * (BN + 8)) + 0) * sizeof(half);
     
-    eed_hgemv_m1n128k64x4_v6<4><<<gridDim, blockDim, dsmem>>>(
+    eed_hgemv_m1n128k64x4_v6<8><<<gridDim, blockDim, dsmem>>>(
+        reinterpret_cast<half *>(A.data_ptr<at::Half>()),  
+        reinterpret_cast<half *>(B.data_ptr<at::Half>()), 
+        reinterpret_cast<half *>(C.data_ptr<at::Half>()),  
+        M, N, K
+        );
+}
+
+
+void edgemv_m1n256k64x4(at::Tensor A, at::Tensor B, at::Tensor C){
+
+    int M = A.size(0);
+    int K = A.size(1);
+    int N = B.size(1);
+
+    const int BM = 8, BN = 256, BK = 64;
+    dim3 blockDim(256);
+    int BX = (N + BN - 1) / BN;
+    int BY = 1;
+    int BZ = 8;
+
+    dim3 gridDim(BX, BY, BZ);
+
+
+    cudaFuncSetAttribute(eed_hgemv_m1n256k64x4_v8<8>,   
+                cudaFuncAttributeMaxDynamicSharedMemorySize, 76032);
+
+    // about 76 KB for m8n256k64
+    unsigned int dsmem = (2 * (BM * (4 * BK + 8) + BK * (BN + 8)) + 0) * sizeof(half);
+    
+    eed_hgemv_m1n256k64x4_v8<8><<<gridDim, blockDim, dsmem>>>(
         reinterpret_cast<half *>(A.data_ptr<at::Half>()),  
         reinterpret_cast<half *>(B.data_ptr<at::Half>()), 
         reinterpret_cast<half *>(C.data_ptr<at::Half>()),  

@@ -3,7 +3,7 @@ import time
 from hgemm.backend import hgemm
 
 A = torch.rand((1, 6144), dtype=torch.float16, device='cuda')
-A_ = torch.rand((128, 6144), dtype=torch.float16, device='cuda')
+A_ = torch.rand((8, 6144), dtype=torch.float16, device='cuda')
 B = torch.rand((6144, 6144 * 4), dtype=torch.float16, device='cuda')
 
 # torch.cuda.cudart().cudaProfilerStart()  

@@ -1468,7 +1468,9 @@ __global__ void eed_hgemm_m8n128k128_v5(
 __global__ void eed_hgemm_m8n128k64x4_v7(
     half * __restrict__ a, half * __restrict__ b, half * __restrict__ c,
     const int M, const int N, const int K) {
-#if __CUDA_ARCH__ >= 800
+#if __CUDA_ARCH__ < 800
+    return;
+#endif
 
     const int BM = 8;
     const int BN = 128;
@@ -1482,7 +1484,8 @@ __global__ void eed_hgemm_m8n128k64x4_v7(
     int tid = threadIdx.x;
     int wid = tid >> 5;
 
-    if (bx >= N / BN || by >= M / BM)
+    // only support dim-M [1, 8]
+    if (bx >= N / BN)
         return;
 
     const int APAD = 8;
@@ -1500,13 +1503,13 @@ __global__ void eed_hgemm_m8n128k64x4_v7(
 
     wmma::fill_fragment(frag_c, __float2half(0.0f));
 
-    int load_a_smem_m = (tid >> 4);
-    int load_a_smem_k = (tid & 15) << 3;
-    int load_b_smem_k = (tid >> 4) << 3;
-    int load_b_smem_n = (tid & 15) << 3;
+    int load_a_smem_m = (tid >> 4);      // 0 ~ 7
+    int load_a_smem_k = (tid & 15) << 3; // 8 ~ 120
+    int load_b_smem_k = (tid >> 4) << 3; // 8 ~ 56
+    int load_b_smem_n = (tid & 15) << 3; // 8 ~ 120
 
-    int s_a_base_addr = __cvta_generic_to_shared(s_a);
-    int s_b_base_addr = __cvta_generic_to_shared(s_b);
+    size_t s_a_base_addr = __cvta_generic_to_shared(s_a);
+    size_t s_b_base_addr = __cvta_generic_to_shared(s_b);
 
     int load_a_smem_addr_0 = s_a_base_addr + OFFSET(load_a_smem_m, load_a_smem_k, BK * 2 + APAD) * sizeof(half);
     int load_b_smem_addr_0 = s_b_base_addr + OFFSET(load_b_smem_k, load_b_smem_n, BN + BPAD) * sizeof(half);
@@ -1527,10 +1530,16 @@ __global__ void eed_hgemm_m8n128k64x4_v7(
     int load_b_gmem_addr = OFFSET(load_b_gmem_k, load_b_gmem_n, N);
 
     {
-        asm ("cp.async.ca.shared.global [%0], [%1], 16;\n" :
-            : "r"(load_a_smem_addr_0 + 0 * s_a_db_offset * (int)sizeof(half)), "l"(&a[load_a_gmem_addr]));
-        asm ("cp.async.ca.shared.global [%0], [%1], 16;\n" :
-            : "r"(load_a_smem_addr_0 + 1 * s_a_db_offset * (int)sizeof(half)), "l"(&a[load_a_gmem_addr]));
+        if (load_a_gmem_m < M) {
+            asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+                : "r"(load_a_smem_addr_0 +
+                      0 * s_a_db_offset * (int)sizeof(half)),
+                  "l"(&a[load_a_gmem_addr]));
+            asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+                : "r"(load_a_smem_addr_0 +
+                      1 * s_a_db_offset * (int)sizeof(half)),
+                  "l"(&a[load_a_gmem_addr]));
+        }
         asm ("cp.async.ca.shared.global [%0], [%1], 16;\n" :
             : "r"(load_b_smem_addr_0), "l"(&b[load_b_gmem_addr        ]));
         asm ("cp.async.ca.shared.global [%0], [%1], 16;\n" :
@@ -1580,11 +1589,18 @@ __global__ void eed_hgemm_m8n128k64x4_v7(
             wmma::mma_sync(frag_c, frag_a[i], frag_b[i], frag_c);
         }
 
-        if (bk % 2 == 0){
-            asm ("cp.async.ca.shared.global [%0], [%1], 16;\n" :
-                : "r"(load_a_smem_addr_0 + 0 * s_a_db_offset * (int)sizeof(half)), "l"(&a[load_a_gmem_addr        ]));
-            asm ("cp.async.ca.shared.global [%0], [%1], 16;\n" :
-                : "r"(load_a_smem_addr_0 + 1 * s_a_db_offset * (int)sizeof(half)), "l"(&a[load_a_gmem_addr        ]));
+        // bk is odd?
+        if (bk % 2 == 0) {
+            if (load_a_gmem_m < M) {
+                asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+                    : "r"(load_a_smem_addr_0 +
+                          0 * s_a_db_offset * (int)sizeof(half)),
+                      "l"(&a[load_a_gmem_addr]));
+                asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+                    : "r"(load_a_smem_addr_0 +
+                          1 * s_a_db_offset * (int)sizeof(half)),
+                      "l"(&a[load_a_gmem_addr]));
+            }
         }
         asm ("cp.async.ca.shared.global [%0], [%1], 16;\n" :
             : "r"(load_b_smem_addr_0 + smem_sel_next * s_b_db_offset * (int)sizeof(half)), "l"(&b[load_b_gmem_addr        ]));
@@ -1637,11 +1653,16 @@ __global__ void eed_hgemm_m8n128k64x4_v7(
     int store_c_smem_addr = OFFSET(load_a_smem_m, load_b_smem_n, BN + BPAD);
     int store_c_gmem_addr = OFFSET(load_a_gmem_m, load_b_gmem_n, N);
 
-    atomicAdd(((half2*)(&c[store_c_gmem_addr    ])), *((half2*)(&smem[store_c_smem_addr    ])));
-    atomicAdd(((half2*)(&c[store_c_gmem_addr + 2])), *((half2*)(&smem[store_c_smem_addr + 2])));
-    atomicAdd(((half2*)(&c[store_c_gmem_addr + 4])), *((half2*)(&smem[store_c_smem_addr + 4])));
-    atomicAdd(((half2*)(&c[store_c_gmem_addr + 6])), *((half2*)(&smem[store_c_smem_addr + 6])));
-#endif
+    if (load_a_gmem_m < M) {
+        atomicAdd(((half2 *)(&c[store_c_gmem_addr])),
+                  *((half2 *)(&smem[store_c_smem_addr])));
+        atomicAdd(((half2 *)(&c[store_c_gmem_addr + 2])),
+                  *((half2 *)(&smem[store_c_smem_addr + 2])));
+        atomicAdd(((half2 *)(&c[store_c_gmem_addr + 4])),
+                  *((half2 *)(&smem[store_c_smem_addr + 4])));
+        atomicAdd(((half2 *)(&c[store_c_gmem_addr + 6])),
+                  *((half2 *)(&smem[store_c_smem_addr + 6])));
+    }
 }
 
 template <int SPLITK>

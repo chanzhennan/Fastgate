@@ -109,7 +109,7 @@ void edgemm_m8n128k64x4(at::Tensor A, at::Tensor B, at::Tensor C){
     dim3 blockDim(128);
     int BX = (N + BN - 1) / BN;
     int BY = (M + BM - 1) / BM;
-    int BZ = 4;
+    int BZ = 8;
 
     dim3 gridDim(BX, BY, BZ);
 

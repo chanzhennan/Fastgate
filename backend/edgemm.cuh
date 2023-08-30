@@ -1479,8 +1479,9 @@ __global__ void eed_hgemm_m8n128k64x4_v7(
     int bx = blockIdx.x;
     int by = blockIdx.y;
     int bz = blockIdx.z;
-    int k_start = K / 4 * bz;
-    int k_end = K / 4 * (bz + 1);
+
+    int k_start = K / gridDim.z * bz;
+
     int tid = threadIdx.x;
     int wid = tid >> 5;
 
@@ -1529,6 +1530,7 @@ __global__ void eed_hgemm_m8n128k64x4_v7(
     int load_a_gmem_addr = OFFSET(load_a_gmem_m, load_a_gmem_k, K);
     int load_b_gmem_addr = OFFSET(load_b_gmem_k, load_b_gmem_n, N);
 
+    // load the first tile of mat_a & mat_b
     {
         if (load_a_gmem_m < M) {
             asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
@@ -1564,31 +1566,14 @@ __global__ void eed_hgemm_m8n128k64x4_v7(
     }
 
     #pragma unroll 32
-    for (int bk = 1; bk < (K / 4) / BK; bk++) {
-
+    for (int bk = 1; bk < (K / gridDim.z) / BK; bk++) {
         int smem_sel = (bk & 1) ^ 1;
         int smem_sel_next = ((bk - 1) & 1) ^ 1;
 
         load_a_gmem_addr += BK;
         load_b_gmem_addr += BK * N;
 
-        // compute A X B for this bk
-        // note that BK / TILE_K = 2
-        wmma::load_matrix_sync(frag_a[0], &s_a[smem_sel * s_a_db_offset + (bk - 1) % 2 * BK + 0], 2 * BK + APAD);
-        wmma::load_matrix_sync(frag_a[1], &s_a[smem_sel * s_a_db_offset + (bk - 1) % 2 * BK + 16], 2 * BK + APAD);
-        wmma::load_matrix_sync(frag_a[2], &s_a[smem_sel * s_a_db_offset + (bk - 1) % 2 * BK + 32], 2 * BK + APAD);
-        wmma::load_matrix_sync(frag_a[3], &s_a[smem_sel * s_a_db_offset + (bk - 1) % 2 * BK + 48], 2 * BK + APAD);
-
-        wmma::load_matrix_sync(frag_b[0], &s_b[smem_sel * s_b_db_offset +                    wid * 32], BN + BPAD);
-        wmma::load_matrix_sync(frag_b[1], &s_b[smem_sel * s_b_db_offset + 16 * (BN + BPAD) + wid * 32], BN + BPAD);
-        wmma::load_matrix_sync(frag_b[2], &s_b[smem_sel * s_b_db_offset + 32 * (BN + BPAD) + wid * 32], BN + BPAD);
-        wmma::load_matrix_sync(frag_b[3], &s_b[smem_sel * s_b_db_offset + 48 * (BN + BPAD) + wid * 32], BN + BPAD);
-
-        #pragma unroll
-        for (int i = 0; i < 4; i++) {
-            wmma::mma_sync(frag_c, frag_a[i], frag_b[i], frag_c);
-        }
-
+        // async load the other tile of mat_a & mat_b
         // bk is odd?
         if (bk % 2 == 0) {
             if (load_a_gmem_m < M) {
@@ -1619,9 +1604,29 @@ __global__ void eed_hgemm_m8n128k64x4_v7(
         asm ("cp.async.ca.shared.global [%0], [%1], 16;\n" :
             : "r"(load_b_smem_addr_7 + smem_sel_next * s_b_db_offset * (int)sizeof(half)), "l"(&b[load_b_gmem_addr + 7 * N]));
 
-        asm ("cp.async.commit_group;\n" ::);
-        asm ("cp.async.wait_group 0;\n" ::);
+        asm("cp.async.commit_group;\n" ::);  // issue cp.async.wait_group at the end of loop body
 
+        // compute A X B for this bk
+        // note that BK / TILE_K = 2
+        wmma::load_matrix_sync(frag_a[0], &s_a[smem_sel * s_a_db_offset + (bk - 1) % 2 * BK + 0], 2 * BK + APAD);
+        wmma::load_matrix_sync(frag_a[1], &s_a[smem_sel * s_a_db_offset + (bk - 1) % 2 * BK + 16], 2 * BK + APAD);
+        wmma::load_matrix_sync(frag_a[2], &s_a[smem_sel * s_a_db_offset + (bk - 1) % 2 * BK + 32], 2 * BK + APAD);
+        wmma::load_matrix_sync(frag_a[3], &s_a[smem_sel * s_a_db_offset + (bk - 1) % 2 * BK + 48], 2 * BK + APAD);
+
+        wmma::load_matrix_sync(frag_b[0], &s_b[smem_sel * s_b_db_offset + wid * 32], BN + BPAD);
+        wmma::load_matrix_sync(frag_b[1], &s_b[smem_sel * s_b_db_offset + 16 * (BN + BPAD) + wid * 32], BN + BPAD);
+        wmma::load_matrix_sync(frag_b[2], &s_b[smem_sel * s_b_db_offset + 32 * (BN + BPAD) + wid * 32], BN + BPAD);
+        wmma::load_matrix_sync(frag_b[3], &s_b[smem_sel * s_b_db_offset + 48 * (BN + BPAD) + wid * 32], BN + BPAD);
+
+#pragma unroll
+        for (int i = 0; i < 4; i++) {
+            wmma::mma_sync(frag_c, frag_a[i], frag_b[i], frag_c);
+        }
+
+        asm("cp.async.wait_group 0;\n" ::);
+
+        // it seems compute correctly without this sync.
+        // if without this sync, the runtime is reduced by 10us
         __syncthreads();
     }
 

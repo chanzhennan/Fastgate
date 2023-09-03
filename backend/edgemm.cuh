@@ -1464,6 +1464,211 @@ __global__ void eed_hgemm_m8n128k128_v5(
 #endif
 }
 
+__global__ void eed_hgemm_m8n128k64x4_v7_bt(
+    half *__restrict__ a, half *__restrict__ b, half *__restrict__ c,
+    const int M, const int N, const int K) {
+#if __CUDA_ARCH__ < 800
+    return;
+#endif
+
+    const int BM = 8;
+    const int BN = 128;
+    const int BK = 64;
+
+    int bx = blockIdx.x;
+    int by = blockIdx.y;
+    int bz = blockIdx.z;
+
+    int k_start = K / gridDim.z * bz;
+
+    int tid = threadIdx.x;
+    int warp_id = tid / 32;
+
+    // only support dim-M [1, 8]
+    if (bx >= N / BN)
+        return;
+
+    const int APAD = 8;
+    const int BPAD = 8;
+
+    extern __shared__ half smem[];
+    half *s_a = smem;
+    half *s_b = smem + 2 * BM * (BK * 2 + APAD);
+    int s_a_db_offset = BM * (BK * 2 + APAD);
+    int s_b_db_offset = BN * (BK + BPAD);
+
+    wmma::fragment<wmma::matrix_a, 8, 32, 16, half, wmma::row_major> frag_a[4];
+    wmma::fragment<wmma::matrix_b, 8, 32, 16, half, wmma::col_major> frag_b[4];
+    wmma::fragment<wmma::accumulator, 8, 32, 16, half> frag_c;
+
+    wmma::fill_fragment(frag_c, __float2half(0.0f));
+
+    int load_a_smem_m = (tid >> 4);       // 0 ~ 7
+    int load_a_smem_k = (tid & 15) << 3;  // 0 ~ 120
+
+    // B tile : 128 x 64 (BN, BK)
+    // each row: 64 * sizeof(half) = 128 Bytes, load float4 ---> 128 Bytes / 16Bytes per thread = 8 threads
+    int load_b_smem_k = (tid % 8) * 8;  // 0 ~ 56
+    int load_b_smem_n = (tid / 8) * 8;  // 0 ~ 120
+
+    size_t s_a_base_addr = __cvta_generic_to_shared(s_a);
+    size_t s_b_base_addr = __cvta_generic_to_shared(s_b);
+
+    int load_a_smem_addr_0 = s_a_base_addr + OFFSET(load_a_smem_m, load_a_smem_k, BK * 2 + APAD) * sizeof(half);
+    int load_b_smem_addr_0 = s_b_base_addr + OFFSET(load_b_smem_n, load_b_smem_k, BK + BPAD) * sizeof(half);
+    int load_b_smem_addr_1 = load_b_smem_addr_0 + (BK + BPAD) * sizeof(half);
+    int load_b_smem_addr_2 = load_b_smem_addr_0 + 2 * (BK + BPAD) * sizeof(half);
+    int load_b_smem_addr_3 = load_b_smem_addr_0 + 3 * (BK + BPAD) * sizeof(half);
+    int load_b_smem_addr_4 = load_b_smem_addr_0 + 4 * (BK + BPAD) * sizeof(half);
+    int load_b_smem_addr_5 = load_b_smem_addr_0 + 5 * (BK + BPAD) * sizeof(half);
+    int load_b_smem_addr_6 = load_b_smem_addr_0 + 6 * (BK + BPAD) * sizeof(half);
+    int load_b_smem_addr_7 = load_b_smem_addr_0 + 7 * (BK + BPAD) * sizeof(half);
+
+    int load_a_gmem_m = by * BM + load_a_smem_m;
+    int load_b_gmem_n = bx * BN + load_b_smem_n;
+    int load_a_gmem_k = k_start + load_a_smem_k;
+    int load_b_gmem_k = k_start + load_b_smem_k;
+
+    int load_a_gmem_addr = OFFSET(load_a_gmem_m, load_a_gmem_k, K);
+    int load_b_gmem_addr = OFFSET(load_b_gmem_n, load_b_gmem_k, K);
+
+    // load the first tile of mat_a & mat_b
+    {
+        if (load_a_gmem_m < M) {
+            asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+                : "r"(load_a_smem_addr_0 +
+                      0 * s_a_db_offset * (int)sizeof(half)),
+                  "l"(&a[load_a_gmem_addr]));
+            asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+                : "r"(load_a_smem_addr_0 +
+                      1 * s_a_db_offset * (int)sizeof(half)),
+                  "l"(&a[load_a_gmem_addr]));
+        }
+        asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_0), "l"(&b[load_b_gmem_addr]));
+        asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_1), "l"(&b[load_b_gmem_addr + K]));
+        asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_2), "l"(&b[load_b_gmem_addr + 2 * K]));
+        asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_3), "l"(&b[load_b_gmem_addr + 3 * K]));
+        asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_4), "l"(&b[load_b_gmem_addr + 4 * K]));
+        asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_5), "l"(&b[load_b_gmem_addr + 5 * K]));
+        asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_6), "l"(&b[load_b_gmem_addr + 6 * K]));
+        asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_7), "l"(&b[load_b_gmem_addr + 7 * K]));
+
+        asm("cp.async.commit_group;\n" ::);
+        asm("cp.async.wait_group 0;\n" ::);
+
+        __syncthreads();
+    }
+
+#pragma unroll 32
+    for (int bk = 1; bk < (K / gridDim.z) / BK; bk++) {
+        int smem_sel = (bk & 1) ^ 1;
+        int smem_sel_next = ((bk - 1) & 1) ^ 1;
+
+        load_a_gmem_addr += BK;
+        load_b_gmem_addr += BK;
+
+        // async load the other tile of mat_a & mat_b
+        // loop time is odd?
+        if (bk % 2 == 0) {
+            if (load_a_gmem_m < M) {
+                asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+                    : "r"(load_a_smem_addr_0 +
+                          0 * s_a_db_offset * (int)sizeof(half)),
+                      "l"(&a[load_a_gmem_addr]));
+                asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+                    : "r"(load_a_smem_addr_0 +
+                          1 * s_a_db_offset * (int)sizeof(half)),
+                      "l"(&a[load_a_gmem_addr]));
+            }
+        }
+        asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_0 + smem_sel_next * s_b_db_offset * (int)sizeof(half)), "l"(&b[load_b_gmem_addr]));
+        asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_1 + smem_sel_next * s_b_db_offset * (int)sizeof(half)), "l"(&b[load_b_gmem_addr + K]));
+        asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_2 + smem_sel_next * s_b_db_offset * (int)sizeof(half)), "l"(&b[load_b_gmem_addr + 2 * K]));
+        asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_3 + smem_sel_next * s_b_db_offset * (int)sizeof(half)), "l"(&b[load_b_gmem_addr + 3 * K]));
+        asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_4 + smem_sel_next * s_b_db_offset * (int)sizeof(half)), "l"(&b[load_b_gmem_addr + 4 * K]));
+        asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_5 + smem_sel_next * s_b_db_offset * (int)sizeof(half)), "l"(&b[load_b_gmem_addr + 5 * K]));
+        asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_6 + smem_sel_next * s_b_db_offset * (int)sizeof(half)), "l"(&b[load_b_gmem_addr + 6 * K]));
+        asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_7 + smem_sel_next * s_b_db_offset * (int)sizeof(half)), "l"(&b[load_b_gmem_addr + 7 * K]));
+
+        asm("cp.async.commit_group;\n" ::);  // issue cp.async.wait_group at the end of loop body
+
+        // compute A X B for this bk
+        // note that BK / TILE_K = 2
+        wmma::load_matrix_sync(frag_a[0], &s_a[smem_sel * s_a_db_offset + (bk - 1) % 2 * BK + 0], 2 * BK + APAD);
+        wmma::load_matrix_sync(frag_a[1], &s_a[smem_sel * s_a_db_offset + (bk - 1) % 2 * BK + 16], 2 * BK + APAD);
+        wmma::load_matrix_sync(frag_a[2], &s_a[smem_sel * s_a_db_offset + (bk - 1) % 2 * BK + 32], 2 * BK + APAD);
+        wmma::load_matrix_sync(frag_a[3], &s_a[smem_sel * s_a_db_offset + (bk - 1) % 2 * BK + 48], 2 * BK + APAD);
+
+        // 32 x 16
+        wmma::load_matrix_sync(frag_b[0], &s_b[smem_sel * s_b_db_offset + warp_id * 32 * (BK + BPAD)], BK + BPAD);
+        wmma::load_matrix_sync(frag_b[1], &s_b[smem_sel * s_b_db_offset + warp_id * 32 * (BK + BPAD) + 16], BK + BPAD);
+        wmma::load_matrix_sync(frag_b[2], &s_b[smem_sel * s_b_db_offset + warp_id * 32 * (BK + BPAD) + 32], BK + BPAD);
+        wmma::load_matrix_sync(frag_b[3], &s_b[smem_sel * s_b_db_offset + warp_id * 32 * (BK + BPAD) + 48], BK + BPAD);
+
+#pragma unroll
+        for (int i = 0; i < 4; i++) {
+            wmma::mma_sync(frag_c, frag_a[i], frag_b[i], frag_c);
+        }
+
+        asm("cp.async.wait_group 0;\n" ::);
+
+        __syncthreads();
+    }
+
+    int smem_sel = ((K / BK) & 1) ^ 1;
+
+    wmma::load_matrix_sync(frag_a[0], &s_a[smem_sel * s_a_db_offset + 1 * BK + 0], 2 * BK + APAD);
+    wmma::load_matrix_sync(frag_a[1], &s_a[smem_sel * s_a_db_offset + 1 * BK + 16], 2 * BK + APAD);
+    wmma::load_matrix_sync(frag_a[2], &s_a[smem_sel * s_a_db_offset + 1 * BK + 32], 2 * BK + APAD);
+    wmma::load_matrix_sync(frag_a[3], &s_a[smem_sel * s_a_db_offset + 1 * BK + 48], 2 * BK + APAD);
+
+    wmma::load_matrix_sync(frag_b[0], &s_b[smem_sel * s_b_db_offset + warp_id * 32 * (BK + BPAD)], BK + BPAD);
+    wmma::load_matrix_sync(frag_b[1], &s_b[smem_sel * s_b_db_offset + warp_id * 32 * (BK + BPAD) + 16], BK + BPAD);
+    wmma::load_matrix_sync(frag_b[2], &s_b[smem_sel * s_b_db_offset + warp_id * 32 * (BK + BPAD) + 32], BK + BPAD);
+    wmma::load_matrix_sync(frag_b[3], &s_b[smem_sel * s_b_db_offset + warp_id * 32 * (BK + BPAD) + 48], BK + BPAD);
+
+#pragma unroll
+    for (int i = 0; i < 4; i++) {
+        wmma::mma_sync(frag_c, frag_a[i], frag_b[i], frag_c);
+    }
+
+    wmma::store_matrix_sync(&smem[warp_id * 32], frag_c, BN + BPAD, wmma::mem_row_major);
+
+    __syncthreads();
+
+    load_b_smem_n = (tid % 16) * 8;
+    load_b_gmem_n = bx * BN + load_b_smem_n;
+
+    int store_c_smem_addr = OFFSET(load_a_smem_m, load_b_smem_n, BN + BPAD);
+    int store_c_gmem_addr = OFFSET(load_a_gmem_m, load_b_gmem_n, N);
+
+    if (load_a_gmem_m < M) {
+        atomicAdd(((half2 *)(&c[store_c_gmem_addr])),
+                  *((half2 *)(&smem[store_c_smem_addr])));
+        atomicAdd(((half2 *)(&c[store_c_gmem_addr + 2])),
+                  *((half2 *)(&smem[store_c_smem_addr + 2])));
+        atomicAdd(((half2 *)(&c[store_c_gmem_addr + 4])),
+                  *((half2 *)(&smem[store_c_smem_addr + 4])));
+        atomicAdd(((half2 *)(&c[store_c_gmem_addr + 6])),
+                  *((half2 *)(&smem[store_c_smem_addr + 6])));
+    }
+}
 
 __global__ void eed_hgemm_m8n128k64x4_v7(
     half * __restrict__ a, half * __restrict__ b, half * __restrict__ c,

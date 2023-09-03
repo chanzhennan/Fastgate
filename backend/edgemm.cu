@@ -131,6 +131,28 @@ void edgemm_m8n128k64x4(at::Tensor A, at::Tensor B, at::Tensor C){
         );
 }
 
+void edgemm_m8n128k64x4_bt(at::Tensor A, at::Tensor B, at::Tensor C) {
+    int M = A.size(0);
+    int K = A.size(1);
+    int N = B.size(1);
+
+    const int BM = 8, BN = 128, BK = 64;
+    dim3 blockDim(128);
+    int BX = (N + BN - 1) / BN;
+    int BY = (M + BM - 1) / BM;
+    int BZ = 8;
+
+    dim3 gridDim(BX, BY, BZ);
+
+    // 40.25 KB for m8n128k64
+    unsigned int dsmem = 2 * (BM * (2 * BK + 8) + BN * (BK + 8)) * sizeof(half);
+
+    eed_hgemm_m8n128k64x4_v7_bt<<<gridDim, blockDim, dsmem>>>(
+        reinterpret_cast<half *>(A.data_ptr<at::Half>()),
+        reinterpret_cast<half *>(B.data_ptr<at::Half>()),
+        reinterpret_cast<half *>(C.data_ptr<at::Half>()),
+        M, N, K);
+}
 
 void edgemm_m8n128k128(at::Tensor A, at::Tensor B, at::Tensor C){
 

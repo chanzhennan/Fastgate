@@ -1,13 +1,15 @@
 import torch
 import time
-from eed.backend import edgemm, fastgemv, edgemm_m8n128k64, edgemm_m8n256k64, edgemm_m8n128k128, edgemv_m1n128k64x4, edgemm_m8n128k64x4, edgemv_m1n256k64x4
+from eed.backend import edgemm, edgemm_m8n128k64, edgemm_m8n256k64, edgemm_m8n128k128, edgemv_m1n128k64x4, edgemm_m8n128k64x4, edgemv_m1n256k64x4
 from eed.backend import edgemm_m8n128k64x4_bt
+from eed.backend import fastgemv, fastgemv_tuned
 
 M = 1
-K = 1024
-N = 1024 * 3
+K = 4096
+N = 4096 * 4
 
-func = edgemv_m1n128k64x4
+tc_func = edgemv_m1n128k64x4
+cc_func = fastgemv
 
 A = torch.rand((M, K), dtype=torch.float16, device='cuda')
 B = torch.rand((K, N), dtype=torch.float16, device='cuda')
@@ -23,11 +25,17 @@ torch.matmul(A, B, out=C_)
 
 print(C_)
 
-func(A, B, C)
+tc_func(A, B, C)
 print(C)
 
 all_close = torch.allclose(C_, C, rtol=1e-1, atol=1e-2)
 print("edgemm verse torch: ", all_close)
+
+cc_func(B_T, A_T, C_T)
+print(C_T)
+
+all_close = torch.allclose(C_T.transpose(0, 1), C_, rtol=1e-1, atol=1e-2)
+print("fastgemv verse torch: ", all_close)
 
 torch_dur = 0
 for _ in range(10):
@@ -43,24 +51,24 @@ for _ in range(100):
 
 edgemm_dur = 0
 for _ in range(10):
-    func(A, B, C)
+    tc_func(A, B, C)
 
 for _ in range(100):
     torch.cuda.synchronize()
     st = time.time()
-    func(A, B, C)
+    tc_func(A, B, C)
     torch.cuda.synchronize()
     ed = time.time()
     edgemm_dur += (ed - st) * 10
 
 fastgemv_dur = 0
 for _ in range(10):
-    fastgemv(B_T, A_T, C_T)
+    cc_func(B_T, A_T, C_T)
 
 for _ in range(100):
     torch.cuda.synchronize()
     st = time.time()
-    fastgemv(B_T, A_T, C_T)
+    cc_func(B_T, A_T, C_T)
     torch.cuda.synchronize()
     ed = time.time()
     fastgemv_dur += (ed - st) * 10

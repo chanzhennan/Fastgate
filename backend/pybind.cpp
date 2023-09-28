@@ -18,4 +18,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m){
   m.def("hgemm", &hgemm);
   m.def("fastgemv", &fastgemv);
   m.def("fastgemv_int8", &fastgemv_int8);
+  m.def("fastgemv_tuned", &fastgemv_tuned);
 }

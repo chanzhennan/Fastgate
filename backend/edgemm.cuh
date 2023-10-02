@@ -1493,8 +1493,7 @@ __global__ void eed_hgemm_m8n128k64x4_v7_bt(
 
     extern __shared__ half smem[];
     half *s_a = smem;
-    half *s_b = smem + 2 * BM * (BK * 2 + APAD);
-    int s_a_db_offset = BM * (BK * 2 + APAD);
+    half *s_b = smem + BM * (BK * 2 + APAD);
     int s_b_db_offset = BN * (BK + BPAD);
 
     wmma::fragment<wmma::matrix_a, 8, 32, 16, half, wmma::row_major> frag_a[4];
@@ -1536,12 +1535,7 @@ __global__ void eed_hgemm_m8n128k64x4_v7_bt(
     {
         if (load_a_gmem_m < M) {
             asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
-                : "r"(load_a_smem_addr_0 +
-                      0 * s_a_db_offset * (int)sizeof(half)),
-                  "l"(&a[load_a_gmem_addr]));
-            asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
-                : "r"(load_a_smem_addr_0 +
-                      1 * s_a_db_offset * (int)sizeof(half)),
+                : "r"(load_a_smem_addr_0),
                   "l"(&a[load_a_gmem_addr]));
         }
         asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
@@ -1580,12 +1574,7 @@ __global__ void eed_hgemm_m8n128k64x4_v7_bt(
         if (bk % 2 == 0) {
             if (load_a_gmem_m < M) {
                 asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
-                    : "r"(load_a_smem_addr_0 +
-                          0 * s_a_db_offset * (int)sizeof(half)),
-                      "l"(&a[load_a_gmem_addr]));
-                asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
-                    : "r"(load_a_smem_addr_0 +
-                          1 * s_a_db_offset * (int)sizeof(half)),
+                    : "r"(load_a_smem_addr_0),
                       "l"(&a[load_a_gmem_addr]));
             }
         }
@@ -1610,10 +1599,10 @@ __global__ void eed_hgemm_m8n128k64x4_v7_bt(
 
         // compute A X B for this bk
         // note that BK / TILE_K = 2
-        wmma::load_matrix_sync(frag_a[0], &s_a[smem_sel * s_a_db_offset + (bk - 1) % 2 * BK + 0], 2 * BK + APAD);
-        wmma::load_matrix_sync(frag_a[1], &s_a[smem_sel * s_a_db_offset + (bk - 1) % 2 * BK + 16], 2 * BK + APAD);
-        wmma::load_matrix_sync(frag_a[2], &s_a[smem_sel * s_a_db_offset + (bk - 1) % 2 * BK + 32], 2 * BK + APAD);
-        wmma::load_matrix_sync(frag_a[3], &s_a[smem_sel * s_a_db_offset + (bk - 1) % 2 * BK + 48], 2 * BK + APAD);
+        wmma::load_matrix_sync(frag_a[0], &s_a[(bk - 1) % 2 * BK + 0], 2 * BK + APAD);
+        wmma::load_matrix_sync(frag_a[1], &s_a[(bk - 1) % 2 * BK + 16], 2 * BK + APAD);
+        wmma::load_matrix_sync(frag_a[2], &s_a[(bk - 1) % 2 * BK + 32], 2 * BK + APAD);
+        wmma::load_matrix_sync(frag_a[3], &s_a[(bk - 1) % 2 * BK + 48], 2 * BK + APAD);
 
         // 32 x 16
         wmma::load_matrix_sync(frag_b[0], &s_b[smem_sel * s_b_db_offset + warp_id * 32 * (BK + BPAD)], BK + BPAD);
@@ -1633,10 +1622,10 @@ __global__ void eed_hgemm_m8n128k64x4_v7_bt(
 
     int smem_sel = ((K / BK) & 1) ^ 1;
 
-    wmma::load_matrix_sync(frag_a[0], &s_a[smem_sel * s_a_db_offset + 1 * BK + 0], 2 * BK + APAD);
-    wmma::load_matrix_sync(frag_a[1], &s_a[smem_sel * s_a_db_offset + 1 * BK + 16], 2 * BK + APAD);
-    wmma::load_matrix_sync(frag_a[2], &s_a[smem_sel * s_a_db_offset + 1 * BK + 32], 2 * BK + APAD);
-    wmma::load_matrix_sync(frag_a[3], &s_a[smem_sel * s_a_db_offset + 1 * BK + 48], 2 * BK + APAD);
+    wmma::load_matrix_sync(frag_a[0], &s_a[1 * BK + 0], 2 * BK + APAD);
+    wmma::load_matrix_sync(frag_a[1], &s_a[1 * BK + 16], 2 * BK + APAD);
+    wmma::load_matrix_sync(frag_a[2], &s_a[1 * BK + 32], 2 * BK + APAD);
+    wmma::load_matrix_sync(frag_a[3], &s_a[1 * BK + 48], 2 * BK + APAD);
 
     wmma::load_matrix_sync(frag_b[0], &s_b[smem_sel * s_b_db_offset + warp_id * 32 * (BK + BPAD)], BK + BPAD);
     wmma::load_matrix_sync(frag_b[1], &s_b[smem_sel * s_b_db_offset + warp_id * 32 * (BK + BPAD) + 16], BK + BPAD);
@@ -1699,8 +1688,7 @@ __global__ void eed_hgemm_m8n128k64x4_v7(
 
     extern __shared__ half smem[];
     half *s_a = smem;
-    half *s_b = smem + 2 * BM * (BK * 2 + APAD);
-    int s_a_db_offset = BM * (BK * 2 + APAD);
+    half *s_b = smem + BM * (BK * 2 + APAD);
     int s_b_db_offset = BK * (BN + BPAD);
 
     wmma::fragment<wmma::matrix_a, 8, 32, 16, half, wmma::row_major> frag_a[4];
@@ -1709,10 +1697,10 @@ __global__ void eed_hgemm_m8n128k64x4_v7(
 
     wmma::fill_fragment(frag_c, __float2half(0.0f));
 
-    int load_a_smem_m = (tid >> 4);      // 0 ~ 7
-    int load_a_smem_k = (tid & 15) << 3; // 8 ~ 120
-    int load_b_smem_k = (tid >> 4) << 3; // 8 ~ 56
-    int load_b_smem_n = (tid & 15) << 3; // 8 ~ 120
+    int load_a_smem_m = (tid >> 4);       // 0 ~ 7
+    int load_a_smem_k = (tid & 15) << 3;  // 0 ~ 120
+    int load_b_smem_k = (tid >> 4) << 3;  // 0 ~ 56
+    int load_b_smem_n = (tid & 15) << 3;  // 0 ~ 120
 
     size_t s_a_base_addr = __cvta_generic_to_shared(s_a);
     size_t s_b_base_addr = __cvta_generic_to_shared(s_b);
@@ -1739,12 +1727,7 @@ __global__ void eed_hgemm_m8n128k64x4_v7(
     {
         if (load_a_gmem_m < M) {
             asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
-                : "r"(load_a_smem_addr_0 +
-                      0 * s_a_db_offset * (int)sizeof(half)),
-                  "l"(&a[load_a_gmem_addr]));
-            asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
-                : "r"(load_a_smem_addr_0 +
-                      1 * s_a_db_offset * (int)sizeof(half)),
+                : "r"(load_a_smem_addr_0),
                   "l"(&a[load_a_gmem_addr]));
         }
         asm ("cp.async.ca.shared.global [%0], [%1], 16;\n" :
@@ -1783,12 +1766,7 @@ __global__ void eed_hgemm_m8n128k64x4_v7(
         if (bk % 2 == 0) {
             if (load_a_gmem_m < M) {
                 asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
-                    : "r"(load_a_smem_addr_0 +
-                          0 * s_a_db_offset * (int)sizeof(half)),
-                      "l"(&a[load_a_gmem_addr]));
-                asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
-                    : "r"(load_a_smem_addr_0 +
-                          1 * s_a_db_offset * (int)sizeof(half)),
+                    : "r"(load_a_smem_addr_0),
                       "l"(&a[load_a_gmem_addr]));
             }
         }
@@ -1813,10 +1791,10 @@ __global__ void eed_hgemm_m8n128k64x4_v7(
 
         // compute A X B for this bk
         // note that BK / TILE_K = 2
-        wmma::load_matrix_sync(frag_a[0], &s_a[smem_sel * s_a_db_offset + (bk - 1) % 2 * BK + 0], 2 * BK + APAD);
-        wmma::load_matrix_sync(frag_a[1], &s_a[smem_sel * s_a_db_offset + (bk - 1) % 2 * BK + 16], 2 * BK + APAD);
-        wmma::load_matrix_sync(frag_a[2], &s_a[smem_sel * s_a_db_offset + (bk - 1) % 2 * BK + 32], 2 * BK + APAD);
-        wmma::load_matrix_sync(frag_a[3], &s_a[smem_sel * s_a_db_offset + (bk - 1) % 2 * BK + 48], 2 * BK + APAD);
+        wmma::load_matrix_sync(frag_a[0], &s_a[(bk - 1) % 2 * BK + 0], 2 * BK + APAD);
+        wmma::load_matrix_sync(frag_a[1], &s_a[(bk - 1) % 2 * BK + 16], 2 * BK + APAD);
+        wmma::load_matrix_sync(frag_a[2], &s_a[(bk - 1) % 2 * BK + 32], 2 * BK + APAD);
+        wmma::load_matrix_sync(frag_a[3], &s_a[(bk - 1) % 2 * BK + 48], 2 * BK + APAD);
 
         wmma::load_matrix_sync(frag_b[0], &s_b[smem_sel * s_b_db_offset + wid * 32], BN + BPAD);
         wmma::load_matrix_sync(frag_b[1], &s_b[smem_sel * s_b_db_offset + 16 * (BN + BPAD) + wid * 32], BN + BPAD);
@@ -1837,10 +1815,10 @@ __global__ void eed_hgemm_m8n128k64x4_v7(
 
     int smem_sel = ((K / BK) & 1) ^ 1;
 
-    wmma::load_matrix_sync(frag_a[0], &s_a[smem_sel * s_a_db_offset + 1 * BK + 0], 2 * BK + APAD);
-    wmma::load_matrix_sync(frag_a[1], &s_a[smem_sel * s_a_db_offset + 1 * BK + 16], 2 * BK + APAD);
-    wmma::load_matrix_sync(frag_a[2], &s_a[smem_sel * s_a_db_offset + 1 * BK + 32], 2 * BK + APAD);
-    wmma::load_matrix_sync(frag_a[3], &s_a[smem_sel * s_a_db_offset + 1 * BK + 48], 2 * BK + APAD);
+    wmma::load_matrix_sync(frag_a[0], &s_a[1 * BK + 0], 2 * BK + APAD);
+    wmma::load_matrix_sync(frag_a[1], &s_a[1 * BK + 16], 2 * BK + APAD);
+    wmma::load_matrix_sync(frag_a[2], &s_a[1 * BK + 32], 2 * BK + APAD);
+    wmma::load_matrix_sync(frag_a[3], &s_a[1 * BK + 48], 2 * BK + APAD);
 
     wmma::load_matrix_sync(frag_b[0], &s_b[smem_sel * s_b_db_offset +                    wid * 32], BN + BPAD);
     wmma::load_matrix_sync(frag_b[1], &s_b[smem_sel * s_b_db_offset + 16 * (BN + BPAD) + wid * 32], BN + BPAD);

@@ -98,12 +98,14 @@ void edgemm_m8n128k64(at::Tensor A, at::Tensor B, at::Tensor C){
         );
 }
 
-
-void edgemm_m8n128k64x4(at::Tensor A, at::Tensor B, at::Tensor C){
-
+void edgemm_m8n128k64x4(at::Tensor A, at::Tensor B, at::Tensor C) {
     int M = A.size(0);
     int K = A.size(1);
     int N = B.size(1);
+
+    if (N % 128 || K % 128) {
+        throw std::invalid_argument("K(input column) & N(output column) must be multiple of 128!");
+    }
 
     const int BM = 8, BN = 128, BK = 64;
     dim3 blockDim(128);
@@ -111,30 +113,39 @@ void edgemm_m8n128k64x4(at::Tensor A, at::Tensor B, at::Tensor C){
     int BY = (M + BM - 1) / BM;
     int BZ = 8;
 
+    if (K % 1024) {
+        BZ = 4;
+        if (K % 512) {
+            BZ = 2;
+            if (K % 256) {
+                BZ = 1;
+            }
+        }
+    }
+
     dim3 gridDim(BX, BY, BZ);
 
-    // const int NSPLIT = 2048;
-    // int split_num = (N + NSPLIT - 1) / NSPLIT;
-    // dim3 gridDim((BX + split_num - 1) / split_num, BY, split_num);
+    // about 36.25 KB
+    uint smem_a = BM * (BK * 2 + 8);
+    uint smem_b = 2 * BK * (BN + 8);
+    unsigned int dsmem = (smem_a + smem_b) * sizeof(half);
 
-    // cudaFuncSetAttribute(eed_hgemm_m8n256k64_v3,   
-    //             cudaFuncAttributeMaxDynamicSharedMemorySize, 98304);
-
-    // about 39 KB for m8n128k64
-    unsigned int dsmem = 2 * (BM * (2 * BK + 8) + BK * (BN + 8)) * sizeof(half);
-    
     eed_hgemm_m8n128k64x4_v7<<<gridDim, blockDim, dsmem>>>(
-        reinterpret_cast<half *>(A.data_ptr<at::Half>()),  
-        reinterpret_cast<half *>(B.data_ptr<at::Half>()), 
-        reinterpret_cast<half *>(C.data_ptr<at::Half>()),  
-        M, N, K
-        );
+        reinterpret_cast<half *>(A.data_ptr<at::Half>()),
+        reinterpret_cast<half *>(B.data_ptr<at::Half>()),
+        reinterpret_cast<half *>(C.data_ptr<at::Half>()),
+        M, N, K);
 }
 
+// matric B(weight) transposed
 void edgemm_m8n128k64x4_bt(at::Tensor A, at::Tensor B, at::Tensor C) {
     int M = A.size(0);
     int K = A.size(1);
-    int N = B.size(1);
+    int N = B.size(0);  // weight shape: N * K
+
+    if (N % 128 || K % 128) {
+        throw std::invalid_argument("K(input column) & N(transposed output row) must be multiple of 128!");
+    }
 
     const int BM = 8, BN = 128, BK = 64;
     dim3 blockDim(128);
@@ -142,10 +153,22 @@ void edgemm_m8n128k64x4_bt(at::Tensor A, at::Tensor B, at::Tensor C) {
     int BY = (M + BM - 1) / BM;
     int BZ = 8;
 
+    if (K % 1024) {
+        BZ = 4;
+        if (K % 512) {
+            BZ = 2;
+            if (K % 256) {
+                BZ = 1;
+            }
+        }
+    }
+
     dim3 gridDim(BX, BY, BZ);
 
-    // 40.25 KB for m8n128k64
-    unsigned int dsmem = 2 * (BM * (2 * BK + 8) + BN * (BK + 8)) * sizeof(half);
+    // about 38.125 KB
+    uint smem_a = BM * (BK * 2 + 8);
+    uint smem_b = 2 * BN * (BK + 8);
+    unsigned int dsmem = (smem_a + smem_b) * sizeof(half);
 
     eed_hgemm_m8n128k64x4_v7_bt<<<gridDim, blockDim, dsmem>>>(
         reinterpret_cast<half *>(A.data_ptr<at::Half>()),

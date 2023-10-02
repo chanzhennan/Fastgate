@@ -159,6 +159,80 @@ __global__ void gemv_fp16_tuned(half* mat, half* vec, half* res, unsigned int n,
   }
 }
 
+
+///////////////////////////// extend GEMV for GEMM in FP16 precision //////////////////////////////
+// thread_per_block = blockDim.x
+// blockDim.y <= SHARED_MEM_MAX_ROWS
+__global__ void gemm_fp16(half* mat, __restrict__ half* vec, half* res, unsigned int K,
+                          unsigned int N, unsigned int num_per_thread) {
+  
+  // each thread load num_per_thread elements from global
+  unsigned int tid = threadIdx.y * blockDim.x + threadIdx.x;
+  unsigned int mid = threadIdx.y;
+  unsigned int row = blockIdx.x;
+  unsigned int start_idx = threadIdx.x;
+  const int32_t lane_id = tid % 32;
+  const int32_t warp_id = tid / 32;
+
+  float4* mat4 = reinterpret_cast<float4*>(mat);
+  float4* vec4 = reinterpret_cast<float4*>(vec);
+  // half2 vec_val[4];
+  // half2 mat_val[4];
+
+  // half2 temp_sum = {__float2half(0.0f), __float2half(0.0f)};
+  float sum = 0.0f;
+
+#pragma unroll
+  for (int iter = 0; iter < num_per_thread >> 3; iter++) {
+    unsigned int j = (start_idx + iter * blockDim.x);
+    if (j >= K >> 3) {break;}
+      float4 vec_val = vec4[mid * (K >> 3) + j];
+      float4 mat_val = mat4[row * (K >> 3) + j];
+      half2* vec_h1 = (half2*)&vec_val.x;
+      half2* vec_h2 = (half2*)&vec_val.y;
+      half2* vec_h3 = (half2*)&vec_val.z;
+      half2* vec_h4 = (half2*)&vec_val.w;
+      half2* mat_h1 = (half2*)&mat_val.x;
+      half2* mat_h2 = (half2*)&mat_val.y;
+      half2* mat_h3 = (half2*)&mat_val.z;
+      half2* mat_h4 = (half2*)&mat_val.w;
+      sum += __half2float(vec_h1->x) * __half2float(mat_h1->x);
+      sum += __half2float(vec_h1->y) * __half2float(mat_h1->y);
+      sum += __half2float(vec_h2->x) * __half2float(mat_h2->x);
+      sum += __half2float(vec_h2->y) * __half2float(mat_h2->y);
+      sum += __half2float(vec_h3->x) * __half2float(mat_h3->x);
+      sum += __half2float(vec_h3->y) * __half2float(mat_h3->y);
+      sum += __half2float(vec_h4->x) * __half2float(mat_h4->x);
+      sum += __half2float(vec_h4->y) * __half2float(mat_h4->y);
+  }
+
+  static __shared__ float shared_mem[WARP_SIZE];
+
+#pragma unroll
+  for (int32_t mask = 16; mask >= 1; mask /= 2) {
+    sum += __shfl_xor_sync(uint32_t(-1), sum, mask);
+  }
+
+  if (lane_id == 0) shared_mem[warp_id] = sum;
+  __syncthreads();
+
+  // sum = tid < ((blockDim.x * blockDim.y) >> 5) ? 
+  //   shared_mem[tid] : 0.0f;
+
+  // sum = warpReduceSum(sum, (blockDim.x >> 5));
+
+  if ((tid % (blockDim.x >> 5) == 0) && (tid < ((blockDim.x * blockDim.y) >> 5))) {
+    sum = shared_mem[tid];
+#pragma unroll
+    for (int r = 1; r < (blockDim.x >> 5); r++){
+      sum += shared_mem[tid + r];
+    }
+    int store_id = tid / (blockDim.x >> 5);
+    res[store_id * N + row] = __float2half(sum);
+  }
+}
+
+
 ///////////////////////////// QUANTIZED-INT8 //////////////////////////////
 
 __global__ void gemv_quantized_int8(int8_t* mat, half* vec, half* res,

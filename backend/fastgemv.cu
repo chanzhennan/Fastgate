@@ -82,3 +82,30 @@ void fastgemv_tuned(at::Tensor A, at::Tensor B, at::Tensor C){
         vec_height_, 
         num_per_thread);
 }
+
+void fastgemv_extend(at::Tensor A, at::Tensor B, at::Tensor C){
+
+    // A: weight, [N, K]
+    // B: vector, [M, K]
+    // C: result, [M, N]
+    int N = A.size(0);
+    int K = B.size(1);
+    int M = B.size(0);
+
+    int block_dim_x = 128;
+    int block_dim_y = M;
+    assert(block_dim_y <= SHARED_MEM_MAX_ROWS);
+    assert(block_dim_x * block_dim_y <= MAX_THREADS_PER_BLOCK);
+    unsigned int num_per_thread = K / block_dim_x;
+    assert(num_per_thread >= 8);
+
+    dim3 grid_dim(N);
+    dim3 block_dim(block_dim_x, block_dim_y);
+
+    gemm_fp16<<<grid_dim, block_dim>>>(
+        reinterpret_cast<half *>(A.data_ptr<at::Half>()),  
+        reinterpret_cast<half *>(B.data_ptr<at::Half>()), 
+        reinterpret_cast<half *>(C.data_ptr<at::Half>()),  
+        K, N, 
+        num_per_thread);
+}

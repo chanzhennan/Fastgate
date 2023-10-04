@@ -4,12 +4,12 @@ from eed.backend import edgemm, edgemm_m8n128k64, edgemm_m8n256k64, edgemm_m8n12
 from eed.backend import edgemm_m8n128k64x4_bt
 from eed.backend import fastgemv, fastgemv_tuned, fastgemv_extend
 
-M = 2
-K = 5120
-N = 5120
+M = 1
+K = 4096
+N = 4096
 
-tc_func = edgemm_m8n128k64x4
-cc_func = fastgemv_extend
+tc_func = edgemv_m1n128k64x4
+cc_func = fastgemv_tuned
 
 A = torch.rand((M, K), dtype=torch.float16, device='cuda')
 B = torch.rand((K, N), dtype=torch.float16, device='cuda')

@@ -12,7 +12,7 @@
 void fastgemv(at::Tensor A, at::Tensor B, at::Tensor C){
 
     int mat_height_ = A.size(0);
-    int vec_height_ = B.size(0);
+    int vec_height_ = B.size(1);
 
     int block_dim_x = 128;
     int block_dim_y = 4;
@@ -35,7 +35,7 @@ void fastgemv(at::Tensor A, at::Tensor B, at::Tensor C){
 void fastgemv_int8(at::Tensor A, at::Tensor B, at::Tensor C){
 
     int mat_height_ = A.size(0);
-    int vec_height_ = B.size(0);
+    int vec_height_ = B.size(1);
 
     int block_dim_x = 128;
     int block_dim_y = 4;
@@ -63,7 +63,7 @@ void fastgemv_int8(at::Tensor A, at::Tensor B, at::Tensor C){
 void fastgemv_tuned(at::Tensor A, at::Tensor B, at::Tensor C){
 
     int mat_height_ = A.size(0);
-    int vec_height_ = B.size(0);
+    int vec_height_ = B.size(1);
 
     int block_dim_x = 128;
     int block_dim_y = 1;

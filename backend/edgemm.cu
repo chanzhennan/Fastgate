@@ -109,18 +109,34 @@ void edgemm_m8n128k64x4(at::Tensor A, at::Tensor B, at::Tensor C) {
 
     const int BM = 8, BN = 128, BK = 64;
     dim3 blockDim(128);
-    int BX = (N + BN - 1) / BN;
+    int BX = N / BN;
     int BY = (M + BM - 1) / BM;
-    int BZ = 8;
+    int BZ = 1;
+
+    int tile_num = BX * BY;
+    if (tile_num <= 64) {
+        BZ = 4;
+        if (tile_num <= 32) {
+            BZ = 8;
+        }
+    }
 
     if (K % 1024) {
-        BZ = 4;
+        BZ = std::min(4, BZ);
         if (K % 512) {
-            BZ = 2;
+            BZ = std::min(2, BZ);
             if (K % 256) {
-                BZ = 1;
+                BZ = std::min(1, BZ);
             }
         }
+    }
+
+    half *output_ptr = reinterpret_cast<half *>(C.data_ptr<at::Half>());
+    if (BZ > 1) {
+        // invalid param
+        // cudaMemset(reinterpret_cast<void *>(C.data_ptr<at::Half>()), 0, K * N * sizeof(half));
+        int output_element_num = M * N;
+        assign_zero<<<output_element_num / 128, 128>>>(output_ptr, output_element_num);
     }
 
     dim3 gridDim(BX, BY, BZ);
@@ -133,7 +149,7 @@ void edgemm_m8n128k64x4(at::Tensor A, at::Tensor B, at::Tensor C) {
     eed_hgemm_m8n128k64x4_v7<<<gridDim, blockDim, dsmem>>>(
         reinterpret_cast<half *>(A.data_ptr<at::Half>()),
         reinterpret_cast<half *>(B.data_ptr<at::Half>()),
-        reinterpret_cast<half *>(C.data_ptr<at::Half>()),
+        output_ptr,
         M, N, K);
 }
 
@@ -149,18 +165,32 @@ void edgemm_m8n128k64x4_bt(at::Tensor A, at::Tensor B, at::Tensor C) {
 
     const int BM = 8, BN = 128, BK = 64;
     dim3 blockDim(128);
-    int BX = (N + BN - 1) / BN;
+    int BX = N / BN;
     int BY = (M + BM - 1) / BM;
-    int BZ = 8;
+    int BZ = 1;
+
+    int tile_num = BX * BY;
+    if (tile_num <= 64) {
+        BZ = 4;
+        if (tile_num <= 32) {
+            BZ = 8;
+        }
+    }
 
     if (K % 1024) {
-        BZ = 4;
+        BZ = std::min(4, BZ);
         if (K % 512) {
-            BZ = 2;
+            BZ = std::min(2, BZ);
             if (K % 256) {
-                BZ = 1;
+                BZ = std::min(1, BZ);
             }
         }
+    }
+
+    half *output_ptr = reinterpret_cast<half *>(C.data_ptr<at::Half>());
+    if (BZ > 1) {
+        int output_element_num = M * N;
+        assign_zero<<<output_element_num / 128, 128>>>(output_ptr, output_element_num);
     }
 
     dim3 gridDim(BX, BY, BZ);

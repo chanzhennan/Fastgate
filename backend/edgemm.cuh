@@ -1666,16 +1666,6 @@ __global__ void eed_hgemm_m8n128k64x4_v7_bt(
     }
 }
 
-__global__ void assign_zero(half *__restrict__ output, int length) {
-    int index = blockDim.x * blockIdx.x + threadIdx.x;
-    if (index >= length) {
-        return;
-    }
-
-    half zero_h = __float2half(0.0f);
-    output[index] = zero_h;
-}
-
 __global__ void eed_hgemm_m8n128k64x4_v7(
     half * __restrict__ a, half * __restrict__ b, half * __restrict__ c,
     const int M, const int N, const int K) {

@@ -135,8 +135,7 @@ void edgemm_m8n128k64x4(at::Tensor A, at::Tensor B, at::Tensor C) {
     if (BZ > 1) {
         // invalid param
         // cudaMemset(reinterpret_cast<void *>(C.data_ptr<at::Half>()), 0, K * N * sizeof(half));
-        int output_element_num = M * N;
-        assign_zero<<<output_element_num / 128, 128>>>(output_ptr, output_element_num);
+        C.zero_();
     }
 
     dim3 gridDim(BX, BY, BZ);
@@ -189,8 +188,7 @@ void edgemm_m8n128k64x4_bt(at::Tensor A, at::Tensor B, at::Tensor C) {
 
     half *output_ptr = reinterpret_cast<half *>(C.data_ptr<at::Half>());
     if (BZ > 1) {
-        int output_element_num = M * N;
-        assign_zero<<<output_element_num / 128, 128>>>(output_ptr, output_element_num);
+        C.zero_();
     }
 
     dim3 gridDim(BX, BY, BZ);

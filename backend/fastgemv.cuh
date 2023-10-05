@@ -1,10 +1,7 @@
 ///////////////////////////////////////////////////////////////
-// The original version of fastgemv comes from 
-
-
-
-
-
+// The original version of fastgemv comes from https://github.com/wangsiping97/FastGEMV
+// We extend the implementation to M > 1 computation as GEMM
+// We make some modifications including larger fetching to improve the performance
 ///////////////////////////////////////////////////////////////
 
 #ifndef FAST_GEMV_CUH_
@@ -22,6 +19,8 @@
 #define WARP_SIZE 32
 #define SHARED_MEM_MAX_ROWS 64
 #define MAX_THREADS_PER_BLOCK 1024
+
+#define DIV_UP(x, y) ((x) + (y) - 1) / (y)
 
 ///////////////////////////// REDUCE SUM //////////////////////////////
 
@@ -126,7 +125,7 @@ __global__ void gemv_fp16_tuned(half* mat, half* vec, half* res, unsigned int n,
   float sum = 0.0f;
 
 #pragma unroll
-  for (int iter = 0; iter < (num_per_thread >> 4); iter++) {
+  for (int iter = 0; iter < DIV_UP(num_per_thread, 16); iter++) {
     unsigned int j = (start_idx + iter * blockDim.x) << 4;
     if (j >= n) {break;}
     *(float4*)(&vec_val[0]) = *(float4*)(&vec[j + 0]);
@@ -184,7 +183,7 @@ __global__ void gemm_fp16(half* mat, __restrict__ half* vec, half* res, unsigned
   float sum = 0.0f;
 
 #pragma unroll
-  for (int iter = 0; iter < num_per_thread >> 3; iter++) {
+  for (int iter = 0; iter < DIV_UP(num_per_thread, 8); iter++) {
     unsigned int j = (start_idx + iter * blockDim.x);
     if (j >= K >> 3) {break;}
       float4 vec_val = vec4[mid * (K >> 3) + j];
@@ -251,7 +250,7 @@ __global__ void gemv_quantized_int8(int8_t* mat, half* vec, half* res,
   float scale_f = __half2float(scale);
 
 #pragma unroll
-  for (int iter = 0; iter < num_per_thread >> 3; iter++) {
+  for (int iter = 0; iter < DIV_UP(num_per_thread, 8); iter++) {
     unsigned int j = start_idx + iter * blockDim.x;
     if (j < n >> 3) {
       float4 vec_val = vec4[j];
@@ -329,7 +328,7 @@ __global__ void gemv_quantized_int4(uint4_2* mat, half* vec, half* res,
   float scale_f = __half2float(scale);
 
 #pragma unroll
-  for (int iter = 0; iter < num_per_thread >> 4; iter++) {
+  for (int iter = 0; iter < DIV_UP(num_per_thread, 16); iter++) {
     unsigned int j = 2 * (start_idx + iter * blockDim.x);
     if (j < n >> 3) {
       float4 vec_val_1 = vec4[j];  // 8 half
@@ -434,7 +433,7 @@ __global__ void gemv_fp16(half* mat, half* vec, half* res, unsigned int n,
   float4* vec4 = reinterpret_cast<float4*>(vec);
 
 #pragma unroll
-  for (int iter = 0; iter < num_per_thread >> 3; iter++) {
+  for (int iter = 0; iter < DIV_UP(num_per_thread, 8); iter++) {
     unsigned int j = start_idx + iter * blockDim.x;
     if (j < n >> 3) {
       float4 vec_val = vec4[j];

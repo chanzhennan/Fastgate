@@ -5,8 +5,8 @@ from eed.backend import edgemm_m8n128k64x4_bt
 from eed.backend import fastgemv, fastgemv_tuned, fastgemv_extend
 
 M = 1
-K = 4096
-N = 4096
+K = 5120
+N = 5120
 
 tc_func = edgemv_m1n128k64x4
 cc_func = fastgemv_tuned

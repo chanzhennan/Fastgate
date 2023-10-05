@@ -1648,15 +1648,32 @@ __global__ void eed_hgemm_m8n128k64x4_v7_bt(
     int store_c_gmem_addr = OFFSET(load_a_gmem_m, load_b_gmem_n, N);
 
     if (load_a_gmem_m < M) {
-        atomicAdd(((half2 *)(&c[store_c_gmem_addr])),
-                  *((half2 *)(&smem[store_c_smem_addr])));
-        atomicAdd(((half2 *)(&c[store_c_gmem_addr + 2])),
-                  *((half2 *)(&smem[store_c_smem_addr + 2])));
-        atomicAdd(((half2 *)(&c[store_c_gmem_addr + 4])),
-                  *((half2 *)(&smem[store_c_smem_addr + 4])));
-        atomicAdd(((half2 *)(&c[store_c_gmem_addr + 6])),
-                  *((half2 *)(&smem[store_c_smem_addr + 6])));
+        if (gridDim.z > 1) {
+            atomicAdd(((half2 *)(&c[store_c_gmem_addr])),
+                      *((half2 *)(&smem[store_c_smem_addr])));
+            atomicAdd(((half2 *)(&c[store_c_gmem_addr + 2])),
+                      *((half2 *)(&smem[store_c_smem_addr + 2])));
+            atomicAdd(((half2 *)(&c[store_c_gmem_addr + 4])),
+                      *((half2 *)(&smem[store_c_smem_addr + 4])));
+            atomicAdd(((half2 *)(&c[store_c_gmem_addr + 6])),
+                      *((half2 *)(&smem[store_c_smem_addr + 6])));
+        } else {
+            *((half2 *)(&c[store_c_gmem_addr])) = *((half2 *)(&smem[store_c_smem_addr]));
+            *((half2 *)(&c[store_c_gmem_addr + 2])) = *((half2 *)(&smem[store_c_smem_addr + 2]));
+            *((half2 *)(&c[store_c_gmem_addr + 4])) = *((half2 *)(&smem[store_c_smem_addr + 4]));
+            *((half2 *)(&c[store_c_gmem_addr + 6])) = *((half2 *)(&smem[store_c_smem_addr + 6]));
+        }
     }
+}
+
+__global__ void assign_zero(half *__restrict__ output, int length) {
+    int index = blockDim.x * blockIdx.x + threadIdx.x;
+    if (index >= length) {
+        return;
+    }
+
+    half zero_h = __float2half(0.0f);
+    output[index] = zero_h;
 }
 
 __global__ void eed_hgemm_m8n128k64x4_v7(
@@ -1842,14 +1859,21 @@ __global__ void eed_hgemm_m8n128k64x4_v7(
     int store_c_gmem_addr = OFFSET(load_a_gmem_m, load_b_gmem_n, N);
 
     if (load_a_gmem_m < M) {
-        atomicAdd(((half2 *)(&c[store_c_gmem_addr])),
-                  *((half2 *)(&smem[store_c_smem_addr])));
-        atomicAdd(((half2 *)(&c[store_c_gmem_addr + 2])),
-                  *((half2 *)(&smem[store_c_smem_addr + 2])));
-        atomicAdd(((half2 *)(&c[store_c_gmem_addr + 4])),
-                  *((half2 *)(&smem[store_c_smem_addr + 4])));
-        atomicAdd(((half2 *)(&c[store_c_gmem_addr + 6])),
-                  *((half2 *)(&smem[store_c_smem_addr + 6])));
+        if (gridDim.z > 1) {
+            atomicAdd(((half2 *)(&c[store_c_gmem_addr])),
+                      *((half2 *)(&smem[store_c_smem_addr])));
+            atomicAdd(((half2 *)(&c[store_c_gmem_addr + 2])),
+                      *((half2 *)(&smem[store_c_smem_addr + 2])));
+            atomicAdd(((half2 *)(&c[store_c_gmem_addr + 4])),
+                      *((half2 *)(&smem[store_c_smem_addr + 4])));
+            atomicAdd(((half2 *)(&c[store_c_gmem_addr + 6])),
+                      *((half2 *)(&smem[store_c_smem_addr + 6])));
+        } else {
+            *((half2 *)(&c[store_c_gmem_addr])) = *((half2 *)(&smem[store_c_smem_addr]));
+            *((half2 *)(&c[store_c_gmem_addr + 2])) = *((half2 *)(&smem[store_c_smem_addr + 2]));
+            *((half2 *)(&c[store_c_gmem_addr + 4])) = *((half2 *)(&smem[store_c_smem_addr + 4]));
+            *((half2 *)(&c[store_c_gmem_addr + 6])) = *((half2 *)(&smem[store_c_smem_addr + 6]));
+        }
     }
 }
 

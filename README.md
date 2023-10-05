@@ -14,4 +14,5 @@ Operator and system optimization for LLM decoding.
 
 ## update
 [23.10.04] fastgemv_tuned: Try to improve fastgemv by larger fetching.
+
 [23.09.30] fastgemv_extend: Support M > 1 based on fastgemv for experimental purpose.

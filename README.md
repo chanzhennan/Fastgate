@@ -10,3 +10,8 @@ Operator and system optimization for LLM decoding.
 2. 对于小batch size 的GEMM（fp16），权重矩阵转置的情况，请调用后缀为_bt 的函数`edgemm_m8n128k64x4_bt`
     * input_feat(MxK) * weight_t(N*K) ---> output_feat(MxN)
     * 需要满足：K 和 N 是128 的倍数
+
+
+## update
+[23.10.04] fastgemv_tuned: Try to improve fastgemv by larger fetching. Only supports (K % 2048 == 0).
+[23.09.30] fastgemv_extend: Support M > 1 based on fastgemv for experimental purpose.

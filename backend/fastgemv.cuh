@@ -90,6 +90,32 @@ __device__ float block_reduce_sum(float reducing, float *shared_mem)
 }
 
 
+__device__ half block_reduce_sum(half reducing, half *shared_mem)
+{
+    // Helper function for reduce softmax exp sum.
+    const int32_t WPT = blockDim.x * blockDim.y / 32;
+    const int32_t lane_id = threadIdx.x % 32;
+    const int32_t warp_id = threadIdx.x / 32;
+
+# pragma unroll
+    for (int32_t mask = 16; mask >= 1; mask /= 2) {
+        reducing = __hadd(reducing, __shfl_xor_sync(uint32_t(-1), reducing, mask));
+    }
+
+    if (lane_id == 0) shared_mem[warp_id] = reducing;
+    __syncthreads();
+
+    if (lane_id < WPT) reducing = shared_mem[lane_id];
+
+# pragma unroll
+    for (int32_t mask = WPT / 2; mask >= 1; mask /= 2) {
+        reducing = __hadd(reducing, __shfl_xor_sync(uint32_t(-1), reducing, mask));
+    }
+    reducing = __shfl_sync(uint32_t(-1), reducing, 0);
+    return reducing;
+}
+
+
 __device__ __forceinline__ half2 warpReduceSum(half2 sum,
                                                unsigned int threadNum) {
   if (threadNum >= 32)
@@ -114,50 +140,102 @@ __global__ void gemv_fp16_tuned(half* mat, half* vec, half* res, unsigned int n,
   
   // each thread load num_per_thread elements from global
   unsigned int tid = threadIdx.x;
-  unsigned int row = blockIdx.y * blockDim.y + threadIdx.y;
+  unsigned int row = (blockIdx.y * blockDim.y + threadIdx.y) << 1;
   unsigned int start_idx = threadIdx.x;
-  float4* mat4 = reinterpret_cast<float4*>(mat);
-  float4* vec4 = reinterpret_cast<float4*>(vec);
-  half2 vec_val[8];
+  half2 vec_val[4];
   half2 mat_val[8];
 
   // half2 temp_sum = {__float2half(0.0f), __float2half(0.0f)};
-  float sum = 0.0f;
+  half2 sum[2];
+  sum[0] = {__float2half(0.0f), __float2half(0.0f)};
+  sum[1] = {__float2half(0.0f), __float2half(0.0f)};
+  half2 gsum;
 
 #pragma unroll
-  for (int iter = 0; iter < DIV_UP(num_per_thread, 16); iter++) {
-    unsigned int j = (start_idx + iter * blockDim.x) << 4;
+  for (int iter = 0; iter < DIV_UP(num_per_thread, 8); iter++) {
+    unsigned int j = (start_idx + iter * blockDim.x) << 3;
     if (j >= n) {break;}
-    *(float4*)(&vec_val[0]) = *(float4*)(&vec[j + 0]);
-    *(float4*)(&vec_val[4]) = *(float4*)(&vec[j + 8]);
-    *(float4*)(&mat_val[0]) = *(float4*)(&mat[row * n + j + 0]);
-    *(float4*)(&mat_val[4]) = *(float4*)(&mat[row * n + j + 8]);
-    sum += __half2float(vec_val[0].x) * __half2float(mat_val[0].x);
-    sum += __half2float(vec_val[0].y) * __half2float(mat_val[0].y);
-    sum += __half2float(vec_val[1].x) * __half2float(mat_val[1].x);
-    sum += __half2float(vec_val[1].y) * __half2float(mat_val[1].y);
-    sum += __half2float(vec_val[2].x) * __half2float(mat_val[2].x);
-    sum += __half2float(vec_val[2].y) * __half2float(mat_val[2].y);
-    sum += __half2float(vec_val[3].x) * __half2float(mat_val[3].x);
-    sum += __half2float(vec_val[3].y) * __half2float(mat_val[3].y);
-    sum += __half2float(vec_val[4].x) * __half2float(mat_val[4].x);
-    sum += __half2float(vec_val[4].y) * __half2float(mat_val[4].y);
-    sum += __half2float(vec_val[5].x) * __half2float(mat_val[5].x);
-    sum += __half2float(vec_val[5].y) * __half2float(mat_val[5].y);
-    sum += __half2float(vec_val[6].x) * __half2float(mat_val[6].x);
-    sum += __half2float(vec_val[6].y) * __half2float(mat_val[6].y);
-    sum += __half2float(vec_val[7].x) * __half2float(mat_val[7].x);
-    sum += __half2float(vec_val[7].y) * __half2float(mat_val[7].y);
+    *(float4*)(&vec_val[0]) = *(float4*)(&vec[j]);
+    *(float4*)(&mat_val[0]) = *(float4*)(&mat[row * n + j]);
+    *(float4*)(&mat_val[4]) = *(float4*)(&mat[(row + 1) * n + j]);
+
+    sum[0] = __hadd2(sum[0], __hmul2(vec_val[0], mat_val[0]));
+    sum[0] = __hadd2(sum[0], __hmul2(vec_val[1], mat_val[1]));
+    sum[0] = __hadd2(sum[0], __hmul2(vec_val[2], mat_val[2]));
+    sum[0] = __hadd2(sum[0], __hmul2(vec_val[3], mat_val[3]));
+
+    sum[1] = __hadd2(sum[1], __hmul2(vec_val[0], mat_val[4]));
+    sum[1] = __hadd2(sum[1], __hmul2(vec_val[1], mat_val[5]));
+    sum[1] = __hadd2(sum[1], __hmul2(vec_val[2], mat_val[6]));
+    sum[1] = __hadd2(sum[1], __hmul2(vec_val[3], mat_val[7]));
   }
 
-  static __shared__ float warpLevelSums[WARP_SIZE];
+  gsum.x = __hadd(sum[0].x, sum[0].y);
+  gsum.y = __hadd(sum[1].x, sum[1].y);
 
-  sum = block_reduce_sum(sum, warpLevelSums);
+  static __shared__ half warpLevelSums[WARP_SIZE];
+
+  gsum.x = block_reduce_sum(gsum.x, warpLevelSums);
+  gsum.y = block_reduce_sum(gsum.y, warpLevelSums);
 
   if (tid == 0) {
-    res[row] = __float2half(sum);
+    *(half2*)(&res[row]) = gsum;
   }
 }
+
+
+// ///////////////////////////// NORMAL //////////////////////////////
+// // thread_per_block = blockDim.x
+// // blockDim.y <= SHARED_MEM_MAX_ROWS
+// __global__ void gemv_fp16_tuned(half* mat, half* vec, half* res, unsigned int n,
+//                           unsigned int num_per_thread) {
+  
+//   // each thread load num_per_thread elements from global
+//   unsigned int tid = threadIdx.x;
+//   unsigned int row = blockIdx.y * blockDim.y + threadIdx.y;
+//   unsigned int start_idx = threadIdx.x;
+//   float4* mat4 = reinterpret_cast<float4*>(mat);
+//   float4* vec4 = reinterpret_cast<float4*>(vec);
+//   half2 vec_val[8];
+//   half2 mat_val[8];
+
+//   // half2 temp_sum = {__float2half(0.0f), __float2half(0.0f)};
+//   float sum = 0.0f;
+
+// #pragma unroll
+//   for (int iter = 0; iter < DIV_UP(num_per_thread, 16); iter++) {
+//     unsigned int j = (start_idx + iter * blockDim.x) << 4;
+//     if (j >= n) {break;}
+//     *(float4*)(&vec_val[0]) = *(float4*)(&vec[j + 0]);
+//     *(float4*)(&vec_val[4]) = *(float4*)(&vec[j + 8]);
+//     *(float4*)(&mat_val[0]) = *(float4*)(&mat[row * n + j + 0]);
+//     *(float4*)(&mat_val[4]) = *(float4*)(&mat[row * n + j + 8]);
+//     sum += __half2float(vec_val[0].x) * __half2float(mat_val[0].x);
+//     sum += __half2float(vec_val[0].y) * __half2float(mat_val[0].y);
+//     sum += __half2float(vec_val[1].x) * __half2float(mat_val[1].x);
+//     sum += __half2float(vec_val[1].y) * __half2float(mat_val[1].y);
+//     sum += __half2float(vec_val[2].x) * __half2float(mat_val[2].x);
+//     sum += __half2float(vec_val[2].y) * __half2float(mat_val[2].y);
+//     sum += __half2float(vec_val[3].x) * __half2float(mat_val[3].x);
+//     sum += __half2float(vec_val[3].y) * __half2float(mat_val[3].y);
+//     sum += __half2float(vec_val[4].x) * __half2float(mat_val[4].x);
+//     sum += __half2float(vec_val[4].y) * __half2float(mat_val[4].y);
+//     sum += __half2float(vec_val[5].x) * __half2float(mat_val[5].x);
+//     sum += __half2float(vec_val[5].y) * __half2float(mat_val[5].y);
+//     sum += __half2float(vec_val[6].x) * __half2float(mat_val[6].x);
+//     sum += __half2float(vec_val[6].y) * __half2float(mat_val[6].y);
+//     sum += __half2float(vec_val[7].x) * __half2float(mat_val[7].x);
+//     sum += __half2float(vec_val[7].y) * __half2float(mat_val[7].y);
+//   }
+
+//   static __shared__ float warpLevelSums[WARP_SIZE];
+
+//   sum = block_reduce_sum(sum, warpLevelSums);
+
+//   if (tid == 0) {
+//     res[row] = __float2half(sum);
+//   }
+// }
 
 
 ///////////////////////////// extend GEMV for GEMM in FP16 precision //////////////////////////////

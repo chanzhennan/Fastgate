@@ -72,7 +72,7 @@ void fastgemv_tuned(at::Tensor A, at::Tensor B, at::Tensor C){
     unsigned int num_per_thread = vec_height_ / block_dim_x;
     assert(num_per_thread >= 8);
 
-    dim3 grid_dim(1, mat_height_ / block_dim_y);
+    dim3 grid_dim(1, mat_height_ / 2 / block_dim_y);
     dim3 block_dim(block_dim_x, block_dim_y);
 
     gemv_fp16_tuned<<<grid_dim, block_dim>>>(

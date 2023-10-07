@@ -1867,6 +1867,208 @@ __global__ void eed_hgemm_m8n128k64x4_v7(
     }
 }
 
+// BM = 16, BN = 128, BK = 64
+// LDK = 2 * BK + APAD = 136
+// LDN = BN + BPAD = 136
+template <int BM, int BN, int BK, int LDK, int LDN>
+__global__ void eed_hgemm_m8n128k64x4_v8(
+    half * __restrict__ a, half * __restrict__ b, half * __restrict__ c,
+    const int M, const int N, const int K) {
+#if __CUDA_ARCH__ < 800
+    return;
+#endif
+
+    int bx = blockIdx.x;
+    int by = blockIdx.y;
+    int bz = blockIdx.z;
+
+    int k_start = K / gridDim.z * bz;
+
+    int tid = threadIdx.x;
+    int wid = tid >> 5; // 0, 1, 2, 3, 4, 5, 6, 7
+
+    // only support dim-M [1, 8]
+    if (bx >= N / BN)
+        return;
+
+    extern __shared__ half smem[];
+    half *s_a = smem;
+    half *s_b = smem + BM * LDK;
+    int s_b_db_offset = BK * LDN;
+
+    wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> frag_a[4];
+    wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::row_major> frag_b[4];
+    wmma::fragment<wmma::accumulator, 16, 16, 16, half> frag_c;
+
+    wmma::fill_fragment(frag_c, __float2half(0.0f));
+
+    int load_a_smem_m = (tid >> 4);       // 0 ~ 15
+    int load_a_smem_k = (tid & 15) << 3;  // 0 ~ 120
+    int load_b_smem_k = (tid >> 4) << 2;  // 0 ~ 60
+    int load_b_smem_n = (tid & 15) << 3;  // 0 ~ 120
+
+    size_t s_a_base_addr = __cvta_generic_to_shared(s_a);
+    size_t s_b_base_addr = __cvta_generic_to_shared(s_b);
+
+    int B_UNIT = LDN * sizeof(half);
+    int load_a_smem_addr_0 = s_a_base_addr + OFFSET(load_a_smem_m, load_a_smem_k, LDK) * sizeof(half);
+    int load_b_smem_addr_0 = s_b_base_addr + OFFSET(load_b_smem_k, load_b_smem_n, LDN) * sizeof(half);
+    int load_b_smem_addr_1 = load_b_smem_addr_0 + B_UNIT;
+    int load_b_smem_addr_2 = load_b_smem_addr_1 + B_UNIT;
+    int load_b_smem_addr_3 = load_b_smem_addr_2 + B_UNIT;
+    // int load_b_smem_addr_4 = load_b_smem_addr_3 + B_UNIT;
+    // int load_b_smem_addr_5 = load_b_smem_addr_4 + B_UNIT;
+    // int load_b_smem_addr_6 = load_b_smem_addr_5 + B_UNIT;
+    // int load_b_smem_addr_7 = load_b_smem_addr_6 + B_UNIT;
+
+    int load_a_gmem_m = by * BM + load_a_smem_m;
+    int load_b_gmem_n = bx * BN + load_b_smem_n;
+    int load_a_gmem_k = k_start + load_a_smem_k;
+    int load_b_gmem_k = k_start + load_b_smem_k;
+
+    int load_a_gmem_addr = OFFSET(load_a_gmem_m, load_a_gmem_k, K);
+    int load_b_gmem_addr = OFFSET(load_b_gmem_k, load_b_gmem_n, N);
+
+    // load the first tile of mat_a & mat_b
+    {
+        if (load_a_gmem_m < M) {
+            asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+                : "r"(load_a_smem_addr_0),
+                  "l"(&a[load_a_gmem_addr]));
+        }
+        asm ("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_0), "l"(&b[load_b_gmem_addr        ]));
+        asm ("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_1), "l"(&b[load_b_gmem_addr +     N]));
+        asm ("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_2), "l"(&b[load_b_gmem_addr + 2 * N]));
+        asm ("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_3), "l"(&b[load_b_gmem_addr + 3 * N]));
+        // asm ("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+        //     : "r"(load_b_smem_addr_4), "l"(&b[load_b_gmem_addr + 4 * N]));
+        // asm ("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+        //     : "r"(load_b_smem_addr_5), "l"(&b[load_b_gmem_addr + 5 * N]));
+        // asm ("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+        //     : "r"(load_b_smem_addr_6), "l"(&b[load_b_gmem_addr + 6 * N]));
+        // asm ("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+        //     : "r"(load_b_smem_addr_7), "l"(&b[load_b_gmem_addr + 7 * N]));
+
+        asm ("cp.async.commit_group;\n" ::);
+        asm ("cp.async.wait_group 0;\n" ::);
+
+        __syncthreads();
+    }
+
+    #pragma unroll 32
+    for (int bk = 1; bk < (K / gridDim.z) / BK; bk++) {
+        int smem_sel = (bk & 1) ^ 1;
+        int smem_sel_next = ((bk - 1) & 1) ^ 1;
+
+        load_a_gmem_addr += BK;
+        load_b_gmem_addr += BK * N;
+
+        int loop_offset = smem_sel_next * s_b_db_offset * (int)sizeof(half);
+
+        // async load the other tile of mat_a & mat_b
+        // bk is odd?
+        if (bk % 2 == 0) {
+            if (load_a_gmem_m < M) {
+                asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+                    : "r"(load_a_smem_addr_0),
+                      "l"(&a[load_a_gmem_addr]));
+            }
+        }
+        asm ("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_0 + loop_offset), "l"(&b[load_b_gmem_addr        ]));
+        asm ("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_1 + loop_offset), "l"(&b[load_b_gmem_addr +     N]));
+        asm ("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_2 + loop_offset), "l"(&b[load_b_gmem_addr + 2 * N]));
+        asm ("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_3 + loop_offset), "l"(&b[load_b_gmem_addr + 3 * N]));
+        // asm ("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+        //     : "r"(load_b_smem_addr_4 + loop_offset), "l"(&b[load_b_gmem_addr + 4 * N]));
+        // asm ("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+        //     : "r"(load_b_smem_addr_5 + loop_offset), "l"(&b[load_b_gmem_addr + 5 * N]));
+        // asm ("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+        //     : "r"(load_b_smem_addr_6 + loop_offset), "l"(&b[load_b_gmem_addr + 6 * N]));
+        // asm ("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+        //     : "r"(load_b_smem_addr_7 + loop_offset), "l"(&b[load_b_gmem_addr + 7 * N]));
+
+        asm("cp.async.commit_group;\n" ::);  // issue cp.async.wait_group at the end of loop body
+
+        // compute A X B for this bk
+        // note that BK / TILE_K = 2
+        int s_a_addr = (bk - 1) % 2 * BK;
+        int s_b_addr = smem_sel * s_b_db_offset + wid * 16;
+        
+        wmma::load_matrix_sync(frag_a[0], &s_a[s_a_addr], LDK);
+        wmma::load_matrix_sync(frag_a[1], &s_a[s_a_addr + 16], LDK);
+        wmma::load_matrix_sync(frag_a[2], &s_a[s_a_addr + 32], LDK);
+        wmma::load_matrix_sync(frag_a[3], &s_a[s_a_addr + 48], LDK);
+
+        wmma::load_matrix_sync(frag_b[0], &s_b[s_b_addr], LDN);
+        wmma::load_matrix_sync(frag_b[1], &s_b[s_b_addr + 16 * LDN], LDN);
+        wmma::load_matrix_sync(frag_b[2], &s_b[s_b_addr + 32 * LDN], LDN);
+        wmma::load_matrix_sync(frag_b[3], &s_b[s_b_addr + 48 * LDN], LDN);
+
+        wmma::mma_sync(frag_c, frag_a[0], frag_b[0], frag_c);
+        wmma::mma_sync(frag_c, frag_a[1], frag_b[1], frag_c);
+        wmma::mma_sync(frag_c, frag_a[2], frag_b[2], frag_c);
+        wmma::mma_sync(frag_c, frag_a[3], frag_b[3], frag_c);
+
+        asm("cp.async.wait_group 0;\n" ::);
+
+        // it seems compute correctly without this sync.
+        // if without this sync, the runtime is reduced by 10us
+        __syncthreads();
+    }
+
+    int s_b_addr = ((((K / gridDim.z) / BK) & 1) ^ 1) * s_b_db_offset + wid * 16;
+
+    wmma::load_matrix_sync(frag_a[0], &s_a[BK], LDK);
+    wmma::load_matrix_sync(frag_a[1], &s_a[BK + 16], LDK);
+    wmma::load_matrix_sync(frag_a[2], &s_a[BK + 32], LDK);
+    wmma::load_matrix_sync(frag_a[3], &s_a[BK + 48], LDK);
+
+    wmma::load_matrix_sync(frag_b[0], &s_b[s_b_addr], LDN);
+    wmma::load_matrix_sync(frag_b[1], &s_b[s_b_addr + 16 * LDN], LDN);
+    wmma::load_matrix_sync(frag_b[1], &s_b[s_b_addr + 32 * LDN], LDN);
+    wmma::load_matrix_sync(frag_b[1], &s_b[s_b_addr + 48 * LDN], LDN);
+
+    wmma::mma_sync(frag_c, frag_a[0], frag_b[0], frag_c);
+    wmma::mma_sync(frag_c, frag_a[1], frag_b[1], frag_c);
+    wmma::mma_sync(frag_c, frag_a[2], frag_b[2], frag_c);
+    wmma::mma_sync(frag_c, frag_a[3], frag_b[3], frag_c);
+
+    // int store_c_gmem_m = by * BM;
+    // int store_c_gmem_n = bx * BN + wid * 32;
+    // int store_c_gmem_addr = OFFSET(store_c_gmem_m, store_c_gmem_n, N);
+    // wmma::store_matrix_sync(&c[store_c_gmem_addr], frag_c, N, wmma::mem_row_major);
+    wmma::store_matrix_sync(&smem[wid * 16], frag_c, LDN, wmma::mem_row_major);
+
+    __syncthreads();
+
+    int store_c_smem_addr = OFFSET(load_a_smem_m, load_b_smem_n, LDN);
+    int store_c_gmem_addr = OFFSET(load_a_gmem_m, load_b_gmem_n, N);
+
+    if (load_a_gmem_m < M) {
+        if (gridDim.z > 1) {
+            atomicAdd(((half2 *)(&c[store_c_gmem_addr])),
+                      *((half2 *)(&smem[store_c_smem_addr])));
+            atomicAdd(((half2 *)(&c[store_c_gmem_addr + 2])),
+                      *((half2 *)(&smem[store_c_smem_addr + 2])));
+            atomicAdd(((half2 *)(&c[store_c_gmem_addr + 4])),
+                      *((half2 *)(&smem[store_c_smem_addr + 4])));
+            atomicAdd(((half2 *)(&c[store_c_gmem_addr + 6])),
+                      *((half2 *)(&smem[store_c_smem_addr + 6])));
+        } else {
+            *((float4*)(&c[store_c_gmem_addr])) = *((float4*)(&smem[store_c_smem_addr]));
+        }
+    }
+}
+
+
 template <int SPLITK>
 __global__ void eed_hgemv_m1n128k64x4_v6(
     half * __restrict__ a, half * __restrict__ b, half * __restrict__ c,
@@ -2236,4 +2438,200 @@ __global__ void eed_hgemv_m1n256k64x4_v8(
 
     atomicAdd(&c[store_c_gmem_n], smem[store_c_smem_n]);
 #endif
+}
+
+
+template <int BM, int BN, int BK, int LDK_A, int LDK_B>
+__global__ void eed_hgemm_m8n128k64x4_v8_bt(
+    half *__restrict__ a, half *__restrict__ b, half *__restrict__ c,
+    const int M, const int N, const int K) {
+#if __CUDA_ARCH__ < 800
+    return;
+#endif
+
+    int bx = blockIdx.x;
+    int by = blockIdx.y;
+    int bz = blockIdx.z;
+
+    int k_start = K / gridDim.z * bz;
+
+    int tid = threadIdx.x;
+    int warp_id = tid / 32;
+
+    // only support dim-M [1, 8]
+    if (bx >= N / BN)
+        return;
+
+    extern __shared__ half smem[];
+    half *s_a = smem;
+    half *s_b = smem + BM * LDK_A;
+    int s_b_db_offset = BN * LDK_B;
+
+    wmma::fragment<wmma::matrix_a, 8, 32, 16, half, wmma::row_major> frag_a[4];
+    wmma::fragment<wmma::matrix_b, 8, 32, 16, half, wmma::col_major> frag_b[4];
+    wmma::fragment<wmma::accumulator, 8, 32, 16, half> frag_c;
+
+    wmma::fill_fragment(frag_c, __float2half(0.0f));
+
+    int load_a_smem_m = (tid >> 4);       // 0 ~ 7
+    int load_a_smem_k = (tid & 15) << 3;  // 0 ~ 120
+
+    // B tile : 128 x 64 (BN, BK)
+    // each row: 64 * sizeof(half) = 128 Bytes, load float4 ---> 128 Bytes / 16Bytes per thread = 8 threads
+    int load_b_smem_k = (tid % 8) * 8;  // 0 ~ 56
+    int load_b_smem_n = (tid / 8) * 8;  // 0 ~ 120
+
+    size_t s_a_base_addr = __cvta_generic_to_shared(s_a);
+    size_t s_b_base_addr = __cvta_generic_to_shared(s_b);
+
+    int load_a_smem_addr_0 = s_a_base_addr + OFFSET(load_a_smem_m, load_a_smem_k, LDK_A) * sizeof(half);
+    int load_b_smem_addr_0 = s_b_base_addr + OFFSET(load_b_smem_n, load_b_smem_k, LDK_B) * sizeof(half);
+    int load_b_smem_addr_1 = load_b_smem_addr_0 + LDK_B * sizeof(half);
+    int load_b_smem_addr_2 = load_b_smem_addr_0 + 2 * LDK_B * sizeof(half);
+    int load_b_smem_addr_3 = load_b_smem_addr_0 + 3 * LDK_B * sizeof(half);
+    int load_b_smem_addr_4 = load_b_smem_addr_0 + 4 * LDK_B * sizeof(half);
+    int load_b_smem_addr_5 = load_b_smem_addr_0 + 5 * LDK_B * sizeof(half);
+    int load_b_smem_addr_6 = load_b_smem_addr_0 + 6 * LDK_B * sizeof(half);
+    int load_b_smem_addr_7 = load_b_smem_addr_0 + 7 * LDK_B * sizeof(half);
+
+    int load_a_gmem_m = by * BM + load_a_smem_m;
+    int load_b_gmem_n = bx * BN + load_b_smem_n;
+    int load_a_gmem_k = k_start + load_a_smem_k;
+    int load_b_gmem_k = k_start + load_b_smem_k;
+
+    int load_a_gmem_addr = OFFSET(load_a_gmem_m, load_a_gmem_k, K);
+    int load_b_gmem_addr = OFFSET(load_b_gmem_n, load_b_gmem_k, K);
+
+    // load the first tile of mat_a & mat_b
+    {
+        if (load_a_gmem_m < M) {
+            asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+                : "r"(load_a_smem_addr_0),
+                  "l"(&a[load_a_gmem_addr]));
+        }
+        asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_0), "l"(&b[load_b_gmem_addr]));
+        asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_1), "l"(&b[load_b_gmem_addr + K]));
+        asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_2), "l"(&b[load_b_gmem_addr + 2 * K]));
+        asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_3), "l"(&b[load_b_gmem_addr + 3 * K]));
+        asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_4), "l"(&b[load_b_gmem_addr + 4 * K]));
+        asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_5), "l"(&b[load_b_gmem_addr + 5 * K]));
+        asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_6), "l"(&b[load_b_gmem_addr + 6 * K]));
+        asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_7), "l"(&b[load_b_gmem_addr + 7 * K]));
+
+        asm("cp.async.commit_group;\n" ::);
+        asm("cp.async.wait_group 0;\n" ::);
+
+        __syncthreads();
+    }
+
+#pragma unroll 32
+    for (int bk = 1; bk < (K / gridDim.z) / BK; bk++) {
+        int smem_sel = (bk & 1) ^ 1;
+        int smem_sel_next = ((bk - 1) & 1) ^ 1;
+
+        load_a_gmem_addr += BK;
+        load_b_gmem_addr += BK;
+
+        // async load the other tile of mat_a & mat_b
+        // loop time is odd?
+        if (bk % 2 == 0) {
+            if (load_a_gmem_m < M) {
+                asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+                    : "r"(load_a_smem_addr_0),
+                      "l"(&a[load_a_gmem_addr]));
+            }
+        }
+        asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_0 + smem_sel_next * s_b_db_offset * (int)sizeof(half)), "l"(&b[load_b_gmem_addr]));
+        asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_1 + smem_sel_next * s_b_db_offset * (int)sizeof(half)), "l"(&b[load_b_gmem_addr + K]));
+        asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_2 + smem_sel_next * s_b_db_offset * (int)sizeof(half)), "l"(&b[load_b_gmem_addr + 2 * K]));
+        asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_3 + smem_sel_next * s_b_db_offset * (int)sizeof(half)), "l"(&b[load_b_gmem_addr + 3 * K]));
+        asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_4 + smem_sel_next * s_b_db_offset * (int)sizeof(half)), "l"(&b[load_b_gmem_addr + 4 * K]));
+        asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_5 + smem_sel_next * s_b_db_offset * (int)sizeof(half)), "l"(&b[load_b_gmem_addr + 5 * K]));
+        asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_6 + smem_sel_next * s_b_db_offset * (int)sizeof(half)), "l"(&b[load_b_gmem_addr + 6 * K]));
+        asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            : "r"(load_b_smem_addr_7 + smem_sel_next * s_b_db_offset * (int)sizeof(half)), "l"(&b[load_b_gmem_addr + 7 * K]));
+
+        asm("cp.async.commit_group;\n" ::);  // issue cp.async.wait_group at the end of loop body
+
+        // compute A X B for this bk
+        int s_a_addr = (bk - 1) % 2 * BK;
+        int s_b_addr = smem_sel * s_b_db_offset + warp_id * 32 * LDK_B;
+        // note that BK / TILE_K = 2
+        wmma::load_matrix_sync(frag_a[0], &s_a[s_a_addr + 0 ], LDK_A);
+        wmma::load_matrix_sync(frag_a[1], &s_a[s_a_addr + 16], LDK_A);
+        wmma::load_matrix_sync(frag_a[2], &s_a[s_a_addr + 32], LDK_A);
+        wmma::load_matrix_sync(frag_a[3], &s_a[s_a_addr + 48], LDK_A);
+
+        // 32 x 16
+        wmma::load_matrix_sync(frag_b[0], &s_b[s_b_addr], LDK_B);
+        wmma::load_matrix_sync(frag_b[1], &s_b[s_b_addr + 16], LDK_B);
+        wmma::load_matrix_sync(frag_b[2], &s_b[s_b_addr + 32], LDK_B);
+        wmma::load_matrix_sync(frag_b[3], &s_b[s_b_addr + 48], LDK_B);
+
+#pragma unroll
+        for (int i = 0; i < 4; i++) {
+            wmma::mma_sync(frag_c, frag_a[i], frag_b[i], frag_c);
+        }
+
+        asm("cp.async.wait_group 0;\n" ::);
+
+        __syncthreads();
+    }
+
+    int s_b_addr = (((K / BK) & 1) ^ 1) * s_b_db_offset + warp_id * 32 * LDK_B;
+
+    wmma::load_matrix_sync(frag_a[0], &s_a[BK + 0 ], LDK_A);
+    wmma::load_matrix_sync(frag_a[1], &s_a[BK + 16], LDK_A);
+    wmma::load_matrix_sync(frag_a[2], &s_a[BK + 32], LDK_A);
+    wmma::load_matrix_sync(frag_a[3], &s_a[BK + 48], LDK_A);
+
+    wmma::load_matrix_sync(frag_b[0], &s_b[s_b_addr], LDK_B);
+    wmma::load_matrix_sync(frag_b[1], &s_b[s_b_addr + 16], LDK_B);
+    wmma::load_matrix_sync(frag_b[2], &s_b[s_b_addr + 32], LDK_B);
+    wmma::load_matrix_sync(frag_b[3], &s_b[s_b_addr + 48], LDK_B);
+
+#pragma unroll
+    for (int i = 0; i < 4; i++) {
+        wmma::mma_sync(frag_c, frag_a[i], frag_b[i], frag_c);
+    }
+
+    wmma::store_matrix_sync(&smem[warp_id * 32], frag_c, LDK_B, wmma::mem_row_major);
+
+    __syncthreads();
+
+    load_b_smem_n = (tid % 16) * 8;
+    load_b_gmem_n = bx * BN + load_b_smem_n;
+
+    int store_c_smem_addr = OFFSET(load_a_smem_m, load_b_smem_n, LDK_B);
+    int store_c_gmem_addr = OFFSET(load_a_gmem_m, load_b_gmem_n, N);
+
+    if (load_a_gmem_m < M) {
+        if (gridDim.z > 1) {
+            atomicAdd(((half2 *)(&c[store_c_gmem_addr])),
+                      *((half2 *)(&smem[store_c_smem_addr])));
+            atomicAdd(((half2 *)(&c[store_c_gmem_addr + 2])),
+                      *((half2 *)(&smem[store_c_smem_addr + 2])));
+            atomicAdd(((half2 *)(&c[store_c_gmem_addr + 4])),
+                      *((half2 *)(&smem[store_c_smem_addr + 4])));
+            atomicAdd(((half2 *)(&c[store_c_gmem_addr + 6])),
+                      *((half2 *)(&smem[store_c_smem_addr + 6])));
+        } else {
+            *((float4*)(&c[store_c_gmem_addr])) = *((float4*)(&smem[store_c_smem_addr]));
+        }
+    }
 }

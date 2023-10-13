@@ -2033,8 +2033,8 @@ __global__ void eed_hgemm_m8n128k64x4_v8(
 
     wmma::load_matrix_sync(frag_b[0], &s_b[s_b_addr], LDN);
     wmma::load_matrix_sync(frag_b[1], &s_b[s_b_addr + 16 * LDN], LDN);
-    wmma::load_matrix_sync(frag_b[1], &s_b[s_b_addr + 32 * LDN], LDN);
-    wmma::load_matrix_sync(frag_b[1], &s_b[s_b_addr + 48 * LDN], LDN);
+    wmma::load_matrix_sync(frag_b[2], &s_b[s_b_addr + 32 * LDN], LDN);
+    wmma::load_matrix_sync(frag_b[3], &s_b[s_b_addr + 48 * LDN], LDN);
 
     wmma::mma_sync(frag_c, frag_a[0], frag_b[0], frag_c);
     wmma::mma_sync(frag_c, frag_a[1], frag_b[1], frag_c);

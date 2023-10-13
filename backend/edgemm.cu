@@ -107,29 +107,31 @@ void edgemm_m8n128k64x4(at::Tensor A, at::Tensor B, at::Tensor C) {
         throw std::invalid_argument("K(input column) & N(output column) must be multiple of 128!");
     }
 
-    const int BM = 8, BN = 128, BK = 64;
+    const int BM = 16, BN = 128, BK = 64;
     dim3 blockDim(256);
     int BX = N / BN;
     int BY = (M + BM - 1) / BM;
     int BZ = 1;
 
     int tile_num = BX * BY;
-    if (tile_num <= 64) {
-        BZ = 4;
-        if (tile_num <= 32) {
-            BZ = 8;
-        }
-    }
+    // if (tile_num <= 64) {
+    //     BZ = 4;
+    //     if (tile_num <= 32) {
+    //         BZ = 8;
+    //     }
+    // }
 
-    if (K % 1024) {
-        BZ = std::min(4, BZ);
-        if (K % 512) {
-            BZ = std::min(2, BZ);
-            if (K % 256) {
-                BZ = std::min(1, BZ);
-            }
-        }
-    }
+    // if (K % 1024) {
+    //     BZ = std::min(4, BZ);
+    //     if (K % 512) {
+    //         BZ = std::min(2, BZ);
+    //         if (K % 256) {
+    //             BZ = std::min(1, BZ);
+    //         }
+    //     }
+    // }
+
+    BZ = (432 / tile_num / 2 == 6) ? 8 : (432 / tile_num / 2);
 
     half *output_ptr = reinterpret_cast<half *>(C.data_ptr<at::Half>());
     if (BZ > 1) {
@@ -145,7 +147,7 @@ void edgemm_m8n128k64x4(at::Tensor A, at::Tensor B, at::Tensor C) {
     uint smem_b = 2 * BK * (BN + 8);
     unsigned int dsmem = (smem_a + smem_b) * sizeof(half);
 
-    eed_hgemm_m8n128k64x4_v8<8, 128, 64, 136, 136><<<gridDim, blockDim, dsmem>>>(
+    eed_hgemm_m8n128k64x4_v8<16, 128, 64, 136, 136><<<gridDim, blockDim, dsmem>>>(
         reinterpret_cast<half *>(A.data_ptr<at::Half>()),
         reinterpret_cast<half *>(B.data_ptr<at::Half>()),
         output_ptr,

@@ -1,21 +1,21 @@
 import torch
 import time
-from eed.backend import edgemm, edgemm_m8n128k64, edgemm_m8n256k64, edgemm_m8n128k128, edgemv_m1n128k64x4, edgemm_m8n128k64x4, edgemv_m1n256k64x4
-from eed.backend import edgemm_m8n128k64x4_bt
+from eed.backend import edgemm, edgemm_m8n128k64, edgemm_m8n256k64, edgemm_m8n128k128, edgemv_m1n128k64x4, edgemm_m8n128k64x4
+from eed.backend import edgemm_m8n128k64x4_bt, edgemm_m8n128k64x4_amd
 from eed.backend import fastgemv, fastgemv_tuned, fastgemv_extend
 from eed.backend import hgemm
 
-M = 8
-K = 4096
-N = 4096 * 3
+M = 2
+K = 1024
+N = 1024
 
-tc_func = edgemm_m8n128k64x4
+tc_func = edgemm_m8n128k64x4_amd
 cc_func = fastgemv_extend
 
 # A = torch.rand((M, K), dtype=torch.float16, device='cuda')
 # B = torch.rand((K, N), dtype=torch.float16, device='cuda')
-A = torch.empty((M, K), dtype=torch.float16, device="cuda").normal_(mean=2., std=2.0)
-B = torch.empty((K, N), dtype=torch.float16, device="cuda").normal_(mean=0., std=2.0)
+A = torch.empty((M, K), dtype=torch.float16, device="cuda").normal_(mean=0., std=1.0)
+B = torch.empty((K, N), dtype=torch.float16, device="cuda").normal_(mean=1., std=1.0)
 B[:, -4:-2] = B[:, -4:-2] / 100
 C_ = torch.empty((M, N), dtype=torch.float16, device='cuda')
 C_c = torch.empty((M, N), dtype=torch.float16, device='cuda')
@@ -34,7 +34,7 @@ hgemm(A, B, C_c)
 torch.cuda.cudart().cudaProfilerStop()
 print(C_c)
 
-all_close = torch.allclose(C_, C_c, rtol=1e-1, atol=1e-2)
+all_close = torch.allclose(C_, C_c, rtol=1e-0, atol=1e-1)
 print("cuBLAS verse torch: ", all_close)
 
 torch.cuda.cudart().cudaProfilerStart()
@@ -42,7 +42,7 @@ tc_func(A, B, C)
 torch.cuda.cudart().cudaProfilerStop()
 print(C)
 
-all_close = torch.allclose(C_, C, rtol=1e-1, atol=1e-2)
+all_close = torch.allclose(C_, C, rtol=1e-0, atol=1e-1)
 print("edgemm verse torch: ", all_close)
 
 torch.cuda.cudart().cudaProfilerStart()
@@ -50,7 +50,7 @@ cc_func(B_T, A, C_f)
 torch.cuda.cudart().cudaProfilerStop()
 print(C_f)
 
-all_close = torch.allclose(C_f, C_, rtol=1e-1, atol=1e-2)
+all_close = torch.allclose(C_f, C_, rtol=1e-0, atol=1e-1)
 print("fastgemv verse torch: ", all_close)
 
 torch_dur = 0

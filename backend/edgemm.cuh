@@ -1868,7 +1868,7 @@ __global__ void eed_hgemm_m8n128k64x4_v7(
 }
 
 // BM = 16, BN = 128, BK = 64
-// LDK = 2 * BK + APAD = 136
+// LDK = BK + APAD = 72
 // LDN = BN + BPAD = 136
 template <int BM, int BN, int BK, int LDK, int LDN>
 __global__ void eed_hgemm_m8n128k64x4_v8(
@@ -1893,7 +1893,8 @@ __global__ void eed_hgemm_m8n128k64x4_v8(
 
     extern __shared__ half smem[];
     half *s_a = smem;
-    half *s_b = smem + BM * LDK;
+    half *s_b = smem + 2 * BM * LDK;
+    int s_a_db_offset = BM * LDK;
     int s_b_db_offset = BK * LDN;
 
     wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> frag_a[4];
@@ -1903,7 +1904,7 @@ __global__ void eed_hgemm_m8n128k64x4_v8(
     wmma::fill_fragment(frag_c, __float2half(0.0f));
 
     int load_a_smem_m = (tid >> 4);       // 0 ~ 15
-    int load_a_smem_k = (tid & 15) << 3;  // 0 ~ 120
+    int load_a_smem_k = (tid & 15) << 2;  // 0 ~ 60
     int load_b_smem_k = (tid >> 4) << 2;  // 0 ~ 60
     int load_b_smem_n = (tid & 15) << 3;  // 0 ~ 120
 
@@ -1913,9 +1914,9 @@ __global__ void eed_hgemm_m8n128k64x4_v8(
     int B_UNIT = LDN * sizeof(half);
     int load_a_smem_addr_0 = s_a_base_addr + OFFSET(load_a_smem_m, load_a_smem_k, LDK) * sizeof(half);
     int load_b_smem_addr_0 = s_b_base_addr + OFFSET(load_b_smem_k, load_b_smem_n, LDN) * sizeof(half);
-    int load_b_smem_addr_1 = load_b_smem_addr_0 + B_UNIT;
-    int load_b_smem_addr_2 = load_b_smem_addr_1 + B_UNIT;
-    int load_b_smem_addr_3 = load_b_smem_addr_2 + B_UNIT;
+    int load_b_smem_addr_1 = load_b_smem_addr_0 +     B_UNIT;
+    int load_b_smem_addr_2 = load_b_smem_addr_0 + 2 * B_UNIT;
+    int load_b_smem_addr_3 = load_b_smem_addr_0 + 3 * B_UNIT;
     // int load_b_smem_addr_4 = load_b_smem_addr_3 + B_UNIT;
     // int load_b_smem_addr_5 = load_b_smem_addr_4 + B_UNIT;
     // int load_b_smem_addr_6 = load_b_smem_addr_5 + B_UNIT;
@@ -1932,7 +1933,7 @@ __global__ void eed_hgemm_m8n128k64x4_v8(
     // load the first tile of mat_a & mat_b
     {
         if (load_a_gmem_m < M) {
-            asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
+            asm("cp.async.ca.shared.global [%0], [%1], 8;\n" :
                 : "r"(load_a_smem_addr_0),
                   "l"(&a[load_a_gmem_addr]));
         }
@@ -1967,25 +1968,27 @@ __global__ void eed_hgemm_m8n128k64x4_v8(
         load_a_gmem_addr += BK;
         load_b_gmem_addr += BK * N;
 
-        int loop_offset = smem_sel_next * s_b_db_offset * (int)sizeof(half);
+        int loop_offset_a = smem_sel_next * s_a_db_offset * (int)sizeof(half);
+        int loop_offset_b = smem_sel_next * s_b_db_offset * (int)sizeof(half);
 
         // async load the other tile of mat_a & mat_b
         // bk is odd?
-        if (bk % 2 == 0) {
-            if (load_a_gmem_m < M) {
-                asm("cp.async.ca.shared.global [%0], [%1], 16;\n" :
-                    : "r"(load_a_smem_addr_0),
+        // if (bk % 2 == 0) {
+        if (load_a_gmem_m < M) {
+            asm("cp.async.ca.shared.global [%0], [%1], 8;\n" :
+                    : "r"(load_a_smem_addr_0 + loop_offset_a),
                       "l"(&a[load_a_gmem_addr]));
-            }
         }
+
+        // }
         asm ("cp.async.ca.shared.global [%0], [%1], 16;\n" :
-            : "r"(load_b_smem_addr_0 + loop_offset), "l"(&b[load_b_gmem_addr        ]));
+            : "r"(load_b_smem_addr_0 + loop_offset_b), "l"(&b[load_b_gmem_addr        ]));
         asm ("cp.async.ca.shared.global [%0], [%1], 16;\n" :
-            : "r"(load_b_smem_addr_1 + loop_offset), "l"(&b[load_b_gmem_addr +     N]));
+            : "r"(load_b_smem_addr_1 + loop_offset_b), "l"(&b[load_b_gmem_addr +     N]));
         asm ("cp.async.ca.shared.global [%0], [%1], 16;\n" :
-            : "r"(load_b_smem_addr_2 + loop_offset), "l"(&b[load_b_gmem_addr + 2 * N]));
+            : "r"(load_b_smem_addr_2 + loop_offset_b), "l"(&b[load_b_gmem_addr + 2 * N]));
         asm ("cp.async.ca.shared.global [%0], [%1], 16;\n" :
-            : "r"(load_b_smem_addr_3 + loop_offset), "l"(&b[load_b_gmem_addr + 3 * N]));
+            : "r"(load_b_smem_addr_3 + loop_offset_b), "l"(&b[load_b_gmem_addr + 3 * N]));
         // asm ("cp.async.ca.shared.global [%0], [%1], 16;\n" :
         //     : "r"(load_b_smem_addr_4 + loop_offset), "l"(&b[load_b_gmem_addr + 4 * N]));
         // asm ("cp.async.ca.shared.global [%0], [%1], 16;\n" :
@@ -1999,7 +2002,7 @@ __global__ void eed_hgemm_m8n128k64x4_v8(
 
         // compute A X B for this bk
         // note that BK / TILE_K = 2
-        int s_a_addr = (bk - 1) % 2 * BK;
+        int s_a_addr = smem_sel * s_a_db_offset;
         int s_b_addr = smem_sel * s_b_db_offset + wid * 16;
         
         wmma::load_matrix_sync(frag_a[0], &s_a[s_a_addr], LDK);
@@ -2024,12 +2027,13 @@ __global__ void eed_hgemm_m8n128k64x4_v8(
         __syncthreads();
     }
 
-    int s_b_addr = ((((K / gridDim.z) / BK) & 1) ^ 1) * s_b_db_offset + wid * 16;
+    int s_a_addr = s_a_db_offset;
+    int s_b_addr = s_b_db_offset + wid * 16;
 
-    wmma::load_matrix_sync(frag_a[0], &s_a[BK], LDK);
-    wmma::load_matrix_sync(frag_a[1], &s_a[BK + 16], LDK);
-    wmma::load_matrix_sync(frag_a[2], &s_a[BK + 32], LDK);
-    wmma::load_matrix_sync(frag_a[3], &s_a[BK + 48], LDK);
+    wmma::load_matrix_sync(frag_a[0], &s_a[s_a_addr], LDK);
+    wmma::load_matrix_sync(frag_a[1], &s_a[s_a_addr + 16], LDK);
+    wmma::load_matrix_sync(frag_a[2], &s_a[s_a_addr + 32], LDK);
+    wmma::load_matrix_sync(frag_a[3], &s_a[s_a_addr + 48], LDK);
 
     wmma::load_matrix_sync(frag_b[0], &s_b[s_b_addr], LDN);
     wmma::load_matrix_sync(frag_b[1], &s_b[s_b_addr + 16 * LDN], LDN);

@@ -98,7 +98,65 @@ void edgemm_m8n128k64(at::Tensor A, at::Tensor B, at::Tensor C){
         );
 }
 
+
 void edgemm_m8n128k64x4(at::Tensor A, at::Tensor B, at::Tensor C) {
+    int M = A.size(0);
+    int K = A.size(1);
+    int N = B.size(1);
+
+    if (N % 128 || K % 128) {
+        throw std::invalid_argument("K(input column) & N(output column) must be multiple of 128!");
+    }
+
+    const int BM = 8, BN = 128, BK = 64;
+    dim3 blockDim(128);
+    int BX = N / BN;
+    int BY = (M + BM - 1) / BM;
+    int BZ = 8;
+
+    // int tile_num = BX * BY;
+    // if (tile_num <= 64) {
+    //     BZ = 4;
+    //     if (tile_num <= 32) {
+    //         BZ = 8;
+    //     }
+    // }
+
+    // if (K % 1024) {
+    //     BZ = std::min(4, BZ);
+    //     if (K % 512) {
+    //         BZ = std::min(2, BZ);
+    //         if (K % 256) {
+    //             BZ = std::min(1, BZ);
+    //         }
+    //     }
+    // }
+
+    // BZ = (432 / tile_num / 2 == 6) ? 8 : (432 / tile_num / 2);
+
+    // half *output_ptr = reinterpret_cast<half *>(C.data_ptr<at::Half>());
+    if (BZ > 1) {
+        // invalid param
+        // cudaMemset(reinterpret_cast<void *>(C.data_ptr<at::Half>()), 0, K * N * sizeof(half));
+        C.zero_();
+    }
+
+    dim3 gridDim(BX, BY, BZ);
+
+    // about 36.25 KB
+    uint smem_a = BM * (BK * 2 + 8);
+    uint smem_b = 2 * BK * (BN + 8);
+    unsigned int dsmem = (smem_a + smem_b) * sizeof(half);
+
+    eed_hgemm_m8n128k64x4_v7<<<gridDim, blockDim, dsmem>>>(
+        reinterpret_cast<half *>(A.data_ptr<at::Half>()),
+        reinterpret_cast<half *>(B.data_ptr<at::Half>()),
+        reinterpret_cast<half *>(C.data_ptr<at::Half>()), 
+        M, N, K);
+}
+
+
+void edgemm_m8n128k64x4_amd(at::Tensor A, at::Tensor B, at::Tensor C) {
     int M = A.size(0);
     int K = A.size(1);
     int N = B.size(1);
@@ -111,7 +169,7 @@ void edgemm_m8n128k64x4(at::Tensor A, at::Tensor B, at::Tensor C) {
     dim3 blockDim(256);
     int BX = N / BN;
     int BY = (M + BM - 1) / BM;
-    int BZ = 1;
+    int BZ = 8;
 
     int tile_num = BX * BY;
     // if (tile_num <= 64) {
@@ -131,9 +189,9 @@ void edgemm_m8n128k64x4(at::Tensor A, at::Tensor B, at::Tensor C) {
     //     }
     // }
 
-    BZ = (432 / tile_num / 2 == 6) ? 8 : (432 / tile_num / 2);
+    // BZ = (432 / tile_num / 2 == 6) ? 8 : (432 / tile_num / 2);
 
-    half *output_ptr = reinterpret_cast<half *>(C.data_ptr<at::Half>());
+    // half *output_ptr = reinterpret_cast<half *>(C.data_ptr<at::Half>());
     if (BZ > 1) {
         // invalid param
         // cudaMemset(reinterpret_cast<void *>(C.data_ptr<at::Half>()), 0, K * N * sizeof(half));
@@ -143,14 +201,14 @@ void edgemm_m8n128k64x4(at::Tensor A, at::Tensor B, at::Tensor C) {
     dim3 gridDim(BX, BY, BZ);
 
     // about 36.25 KB
-    uint smem_a = BM * (BK * 2 + 8);
+    uint smem_a = 2 * BM * (BK + 8);
     uint smem_b = 2 * BK * (BN + 8);
     unsigned int dsmem = (smem_a + smem_b) * sizeof(half);
 
-    eed_hgemm_m8n128k64x4_v8<16, 128, 64, 136, 136><<<gridDim, blockDim, dsmem>>>(
+    eed_hgemm_m8n128k64x4_v8<16, 128, 64, 72, 136><<<gridDim, blockDim, dsmem>>>(
         reinterpret_cast<half *>(A.data_ptr<at::Half>()),
         reinterpret_cast<half *>(B.data_ptr<at::Half>()),
-        output_ptr,
+        reinterpret_cast<half *>(C.data_ptr<at::Half>()), 
         M, N, K);
 }
 

@@ -9,3 +9,4 @@ void edgemv_m1n128k64x4(at::Tensor A, at::Tensor B, at::Tensor C);
 void edgemm_m8n128k64x4(at::Tensor A, at::Tensor B, at::Tensor C);
 void edgemm_m8n128k64x4_bt(at::Tensor A, at::Tensor B, at::Tensor C);
 void edgemv_m1n256k64x4(at::Tensor A, at::Tensor B, at::Tensor C);
+void edgemm_m8n128k64x4_amd(at::Tensor A, at::Tensor B, at::Tensor C);

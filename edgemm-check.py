@@ -1,15 +1,15 @@
 import torch
 import time
 from eed.backend import edgemm, edgemm_m8n128k64, edgemm_m8n256k64, edgemm_m8n128k128, edgemv_m1n128k64x4, edgemm_m8n128k64x4
-from eed.backend import edgemm_m8n128k64x4_bt, edgemm_m8n128k64x4_amd
+from eed.backend import edgemm_m8n128k64x4_bt, edgemm_m8n128k64x4_tr_amd, edgemm_m8n256k32x8
 from eed.backend import fastgemv, fastgemv_tuned, fastgemv_extend
 from eed.backend import hgemm
 
-M = 2
-K = 1024
-N = 1024
+M = 8
+K = 4096
+N = 4096
 
-tc_func = edgemm_m8n128k64x4_amd
+tc_func = edgemm_m8n128k64x4_tr_amd
 cc_func = fastgemv_extend
 
 # A = torch.rand((M, K), dtype=torch.float16, device='cuda')
@@ -38,7 +38,7 @@ all_close = torch.allclose(C_, C_c, rtol=1e-0, atol=1e-1)
 print("cuBLAS verse torch: ", all_close)
 
 torch.cuda.cudart().cudaProfilerStart()
-tc_func(A, B, C)
+tc_func(A, B_T, C)
 torch.cuda.cudart().cudaProfilerStop()
 print(C)
 
@@ -79,12 +79,12 @@ for _ in range(100):
 
 edgemm_dur = 0
 for _ in range(10):
-    tc_func(A, B, C)
+    tc_func(A, B_T, C)
 
 for _ in range(100):
     torch.cuda.synchronize()
     st = time.time()
-    tc_func(A, B, C)
+    tc_func(A, B_T, C)
     torch.cuda.synchronize()
     ed = time.time()
     edgemm_dur += (ed - st) * 10

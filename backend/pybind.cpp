@@ -5,6 +5,7 @@
 #include "hgemm.h"
 #include "edgemm.h"
 #include "fastgemv.h"
+#include "edgemm_tr.h"
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m){
   m.def("edgemm_m8n128k64x4_tr_amd", &edgemm_m8n128k64x4_tr_amd);
@@ -23,4 +24,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m){
   m.def("fastgemv_int8", &fastgemv_int8);
   m.def("fastgemv_tuned", &fastgemv_tuned);
   m.def("fastgemv_extend", &fastgemv_extend);
+  /*
+    A collection of Flat-GEMM with transposed weight (B):
+  */
+  m.def("gemm_m8n128k64x4_bt", &gemm_m8n128k64x4_bt);
+  m.def("gemm_m8n32k128x8_bt", &gemm_m8n32k128x8_bt);
+  m.def("gemm_m8n32k256x8_bt", &gemm_m8n32k256x8_bt);
 }

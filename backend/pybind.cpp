@@ -30,4 +30,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m){
   m.def("gemm_m8n128k64x4_bt", &gemm_m8n128k64x4_bt);
   m.def("gemm_m8n32k128x8_bt", &gemm_m8n32k128x8_bt);
   m.def("gemm_m8n32k256x8_bt", &gemm_m8n32k256x8_bt);
+  m.def("gemm_m8n32k256x8_bt_bz2", &gemm_m8n32k256x8_bt_bz2);
+  m.def("gemm_m8n64k128x8_bt_exp", &gemm_m8n64k128x8_bt_exp);
 }

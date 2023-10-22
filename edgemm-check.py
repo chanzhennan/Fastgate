@@ -4,19 +4,19 @@ from eed.backend import edgemm, edgemm_m8n128k64, edgemm_m8n256k64, edgemm_m8n12
 from eed.backend import edgemm_m8n128k64x4_bt, edgemm_m8n128k64x4_tr_amd, edgemm_m8n256k32x8
 from eed.backend import fastgemv, fastgemv_tuned, fastgemv_extend
 from eed.backend import hgemm
-from eed.backend import gemm_m8n32k256x8_bt
+from eed.backend import gemm_m8n32k256x8_bt, gemm_m8n32k128x8_bt, gemm_m8n64k128x8_bt_exp
 
-M = 2
+M = 4
 K = 4096
-N = 4096 * 3
+N = 4096
 
 tc_func = gemm_m8n32k256x8_bt
 cc_func = fastgemv_extend
 
 # A = torch.rand((M, K), dtype=torch.float16, device='cuda')
 # B = torch.rand((K, N), dtype=torch.float16, device='cuda')
-A = torch.empty((M, K), dtype=torch.float16, device="cuda").normal_(mean=0., std=1.0)
-B = torch.empty((K, N), dtype=torch.float16, device="cuda").normal_(mean=1., std=1.0)
+A = torch.empty((M, K), dtype=torch.float16, device="cuda").normal_(mean=0., std=0.5)
+B = torch.empty((K, N), dtype=torch.float16, device="cuda").normal_(mean=1., std=0.5)
 B[:, -4:-2] = B[:, -4:-2] / 100
 C_ = torch.empty((M, N), dtype=torch.float16, device='cuda')
 C_c = torch.empty((M, N), dtype=torch.float16, device='cuda')
@@ -35,8 +35,9 @@ hgemm(A, B, C_c)
 torch.cuda.cudart().cudaProfilerStop()
 print(C_c)
 
-all_close = torch.allclose(C_, C_c, rtol=1e-0, atol=1e-1)
+all_close = torch.allclose(C_, C_c, rtol=1e-0, atol=1e-2)
 print("cuBLAS verse torch: ", all_close)
+print((C_c - C_).max().item())
 
 torch.cuda.cudart().cudaProfilerStart()
 tc_func(A, B_T, C)
@@ -45,6 +46,12 @@ print(C)
 
 all_close = torch.allclose(C_, C, rtol=1e-0, atol=1e-1)
 print("edgemm verse torch: ", all_close)
+print((C_ - C).max().item())
+idx = torch.argmax((C_ - C))
+row_idx = idx // N 
+col_idx = idx % N
+print(C_[row_idx, col_idx].item(), C[row_idx, col_idx].item())
+
 
 torch.cuda.cudart().cudaProfilerStart()
 cc_func(B_T, A, C_f)

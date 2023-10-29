@@ -62,7 +62,8 @@ void gemm_m8n32k128x8_bt(at::Tensor A, at::Tensor B, at::Tensor C) {
 
     const int BM = 8, BN = 32, BK = 128;
     dim3 blockDim(256);
-    dim3 gridDim(N / BN, 1, 2);
+    dim3 gridDim(N / BN, 1, 1);
+    // orig: BZ=2
     gemm_m8n32k128x8_bz1<BM,BN,BK,BK+8,BN+8><<<gridDim, blockDim>>>(
         reinterpret_cast<half *>(A.data_ptr<at::Half>()),
         reinterpret_cast<half *>(B.data_ptr<at::Half>()),
@@ -73,7 +74,7 @@ void gemm_m8n32k128x8_bt(at::Tensor A, at::Tensor B, at::Tensor C) {
 /*
     Using 8x32x16 tensor core. Experimental version. By Ke Hong.
 */
-void gemm_m8n64k128x8_bt_exp(at::Tensor A, at::Tensor B, at::Tensor C) {
+void gemm_m8n64k128x8_bt_exp(at::Tensor A, at::Tensor B, at::Tensor C, int bz) {
     int M = A.size(0);
     int K = A.size(1);
     int N = B.size(0);  // weight shape: N * K
@@ -83,7 +84,8 @@ void gemm_m8n64k128x8_bt_exp(at::Tensor A, at::Tensor B, at::Tensor C) {
 
     const int BM = 8, BN = 64, BK = 128;
     dim3 blockDim(256);
-    dim3 gridDim(N / BN, 1, 1);
+    dim3 gridDim(N / BN, 1, bz);
+    // orig: BZ = 1
     gemm_m8n64k128x8_bz1<BM,BN,BK,BK+8,BN+8><<<gridDim, blockDim>>>(
         reinterpret_cast<half *>(A.data_ptr<at::Half>()),
         reinterpret_cast<half *>(B.data_ptr<at::Half>()),
@@ -117,7 +119,7 @@ void gemm_m8n32k256x8_bt(at::Tensor A, at::Tensor B, at::Tensor C) {
 /*
     Using 8x32x16 tensor core. Another faster version. By Zehua Wang.
 */
-void gemm_m8n32k256x8_bt_bz2(at::Tensor A, at::Tensor B, at::Tensor C) {
+void gemm_m8n32k256x8_bt_bz2(at::Tensor A, at::Tensor B, at::Tensor C, int bz) {
     int M = A.size(0);
     int K = A.size(1);
     int N = B.size(0);  // weight shape: N * K
@@ -127,7 +129,7 @@ void gemm_m8n32k256x8_bt_bz2(at::Tensor A, at::Tensor B, at::Tensor C) {
 
     const int BM = 8, BN = 32, BK = 256;
     dim3 blockDim(256);
-    dim3 gridDim(N / BN, 1, 2);
+    dim3 gridDim(N / BN, 1, bz);
     
     gemm_m8n32k256x8_bz1<BM,BN,BK,BK+8,BN+8><<<gridDim, blockDim>>>(
         reinterpret_cast<half *>(A.data_ptr<at::Half>()),

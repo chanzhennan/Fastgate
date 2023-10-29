@@ -2,11 +2,10 @@ import torch
 import time
 import argparse
 from eed.backend import edgemm, edgemm_m8n128k64, edgemm_m8n256k64, edgemm_m8n128k128, edgemv_m1n128k64x4, edgemm_m8n128k64x4
-from eed.backend import edgemm_m8n256k32x8, edgemm_m8n128k64x4_amd
+from eed.backend import edgemm_m8n256k32x8
 from eed.backend import fastgemv, fastgemv_tuned, fastgemv_extend
-from eed.backend import hgemm_tr, hgemm
-from eed.backend import gemm_m8n32k256x8_bt, gemm_m8n32k128x8_bt, gemm_m8n64k128x8_bt_exp
-from eed.backend import flat_gemm_m8n128k64x4_bz1, flat_gemm_m8n256k64x8, flat_gemm_m8n512k32x16, flat_gemm_m8n64k128x8, flat_gemm_m8n32k256x8
+from eed.backend import hgemm_tr
+from eed.backend import gemm_m8n32k256x8_bt, gemm_m8n32k128x8_bt, gemm_m8n64k128x8_bt_exp, gemm_m8n32k256x8_bt_bz2
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--m', type=int, default=8)
@@ -17,9 +16,9 @@ args = parser.parse_args()
 M = args.m
 K = args.k
 N = args.n
-tc_func = flat_gemm_m8n128k64x4_bz1
+tc_func = gemm_m8n32k256x8_bt_bz2
 cc_func = fastgemv_extend
-split = 1
+split = 4
 
 A = torch.empty((M, K), dtype=torch.float16, device="cuda").normal_(mean=0., std=0.5)
 B = torch.empty((K, N), dtype=torch.float16, device="cuda").normal_(mean=1., std=0.5)
@@ -37,7 +36,7 @@ torch.matmul(A, B, out=C_)
 # print(C_)
 
 torch.cuda.cudart().cudaProfilerStart()
-hgemm(A, B, C_c)
+hgemm_tr(A, B_T, C_c)
 torch.cuda.cudart().cudaProfilerStop()
 # print(C_c)
 
@@ -46,7 +45,7 @@ all_close = torch.allclose(C_, C_c, rtol=1e-0, atol=1e-2)
 # print((C_c - C_).max().item())
 
 torch.cuda.cudart().cudaProfilerStart()
-tc_func(A, B, C, split)
+tc_func(A, B_T, C, split)
 torch.cuda.cudart().cudaProfilerStop()
 # print(C)
 
@@ -81,24 +80,24 @@ for _ in range(100):
 
 cublas_dur = 0
 for _ in range(10):
-    hgemm(A, B, C_c)
+    hgemm_tr(A, B_T, C_c)
 
 for _ in range(100):
     torch.cuda.synchronize()
     st = time.time()
-    hgemm(A, B, C_c)
+    hgemm_tr(A, B_T, C_c)
     torch.cuda.synchronize()
     ed = time.time()
     cublas_dur += (ed - st) * 10
 
 edgemm_dur = 0
 for _ in range(10):
-    tc_func(A, B, C, split)
+    tc_func(A, B_T, C, split)
 
 for _ in range(100):
     torch.cuda.synchronize()
     st = time.time()
-    tc_func(A, B, C, split)
+    tc_func(A, B_T, C, split)
     torch.cuda.synchronize()
     ed = time.time()
     edgemm_dur += (ed - st) * 10

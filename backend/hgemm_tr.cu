@@ -1,5 +1,3 @@
-#include "hgemm.h"
-
 #include <ATen/ATen.h>
 #include <ATen/cuda/CUDAContext.h>
 
@@ -25,12 +23,15 @@
 
 #include <cuda_fp16.h>
 
+#include "hgemm_tr.h"
 
-void hgemm(at::Tensor A, at::Tensor B, at::Tensor C){
+
+// A:M*K B:N*K
+void hgemm_tr(at::Tensor A, at::Tensor B, at::Tensor C){
 
     int M = A.size(0);
     int K = A.size(1);
-    int N = B.size(1);
+    int N = B.size(0);
 
     // at::Tensor alpha_half = torch::ones({1}, dtype(at::ScalarType::Half));
     // at::Tensor beta_half = torch::zeros({1}, dtype(at::ScalarType::Half));
@@ -55,13 +56,13 @@ void hgemm(at::Tensor A, at::Tensor B, at::Tensor C){
     half alpha_half = __float2half(alpha);
     half beta_half = __float2half(beta);
 
-    cublasGemmEx(cublasH, CUBLAS_OP_N, CUBLAS_OP_N, 
+    cublasGemmEx(cublasH, CUBLAS_OP_T, CUBLAS_OP_N, 
                     N, M, K,
                     // (const void*)reinterpret_cast<half *>(alpha_half.data_ptr<at::Half>()), 
                     (const void*)reinterpret_cast<half *>(&alpha_half),
                     // (const void*)(&alpha), 
                     (const void*)reinterpret_cast<half *>(B.data_ptr<at::Half>()),
-                    CUDA_R_16F, N, 
+                    CUDA_R_16F, K, 
                     (const void*)reinterpret_cast<half *>(A.data_ptr<at::Half>()), 
                     CUDA_R_16F, K, 
                     // (const void*)reinterpret_cast<half *>(beta_half.data_ptr<at::Half>()), 
@@ -72,3 +73,4 @@ void hgemm(at::Tensor A, at::Tensor B, at::Tensor C){
                     CUBLAS_COMPUTE_16F,
                     CUBLAS_GEMM_DEFAULT_TENSOR_OP);
 }
+

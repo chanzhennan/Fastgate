@@ -4,7 +4,9 @@ from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 
 sources = [os.path.join('backend', f'pybind.cpp'), 
            os.path.join('backend', f'hgemm.cu'),
+           os.path.join('backend', f'hgemm_tr.cu'),
            os.path.join('backend', f'edgemm.cu'),
+           os.path.join('backend', f'flatgemm.cu'),
            os.path.join('backend', f'edgemm_tr.cu'),
            os.path.join('backend', f'fastgemv.cu')]
 

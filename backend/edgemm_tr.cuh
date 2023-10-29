@@ -155,30 +155,30 @@ __global__ void gemm_m8n32k256x8_bz1(
      * load_b 每个warp访问4*256个元素，通过cp.async指定访问16B即8个half完成
     */
     int load_a_smem_m = (tid >> 5);      // 0 ~ 7    | 0 1  2 ...  7   每个索引32个一组 共8组
-    int load_a_smem_k = (tid & 31) << 3; // 0 ~ 248  | 0 8 16 ... 248(32个数)  循环8组  间隔是8个half 16B
+    int load_ab_smem_k = (tid & 31) << 3; // 0 ~ 248  | 0 8 16 ... 248(32个数)  循环8组  间隔是8个half 16B
     int load_b_smem_n = (tid >> 5) << 2; // 0 ~ 28   | 0 4  8 ... 28   每个索引32个一组 共8组
-    int load_b_smem_k = load_a_smem_k;
+    // int load_b_smem_k = load_a_smem_k;
 
     // ptx address space conversion
-    size_t s_a_base_addr = __cvta_generic_to_shared(s_a);
-    size_t s_b_base_addr = __cvta_generic_to_shared(s_b);
+    // size_t s_a_base_addr = __cvta_generic_to_shared(s_a);
+    // size_t s_b_base_addr = __cvta_generic_to_shared(s_b);
 
-    int load_a_smem_addr_0 = s_a_base_addr + OFFSET(load_a_smem_m, load_a_smem_k, LDK) * sizeof(half);
+    int load_a_smem_addr_0 = __cvta_generic_to_shared(s_a) + OFFSET(load_a_smem_m, load_ab_smem_k, LDK) * sizeof(half);
     int load_b_smem_addrs[4];
     #pragma unroll
     for(int i=0; i<4; i++)
-        load_b_smem_addrs[i] = s_b_base_addr + OFFSET(load_b_smem_n, load_b_smem_k, LDK) * sizeof(half) + i * (LDK) * sizeof(half);
+        load_b_smem_addrs[i] = __cvta_generic_to_shared(s_b) + OFFSET(load_b_smem_n, load_ab_smem_k, LDK) * sizeof(half) + i * (LDK) * sizeof(half);
 
-    int load_a_gmem_m = load_a_smem_m;
-    int load_b_gmem_n = bx * BN + load_b_smem_n;
-    int load_a_gmem_k = k_start + load_a_smem_k;
-    int load_b_gmem_k = k_start + load_b_smem_k;
+    // int load_a_gmem_m = load_a_smem_m;
+    // int load_b_gmem_n = bx * BN + load_b_smem_n;
+    // int load_ab_gmem_k = k_start + load_ab_smem_k;
+    // int load_b_gmem_k = k_start + load_ab_smem_k;
 
-    int load_a_gmem_addr = OFFSET(load_a_gmem_m, load_a_gmem_k, K);
-    int load_b_gmem_addr = OFFSET(load_b_gmem_n, load_b_gmem_k, K);
+    int load_a_gmem_addr = OFFSET(load_a_smem_m, (k_start + load_ab_smem_k), K);
+    int load_b_gmem_addr = OFFSET((bx * BN + load_b_smem_n), (k_start + load_ab_smem_k), K);
 
     for (int bk = 0; bk < (K / gridDim.z) / BK; bk++ ) {
-        if (load_a_gmem_m < M) {
+        if (load_a_smem_m < M) {
             asm("cp.async.cg.shared.global.L2::128B [%0], [%1], 16;\n" :
                 : "r"(load_a_smem_addr_0),
                     "l"(&a[load_a_gmem_addr]));
@@ -212,10 +212,10 @@ __global__ void gemm_m8n32k256x8_bz1(
 
     __syncthreads();
 
-    int shmem_c_m = tid >> 5;   // 0, 1, 2, 3, 4, 5, 6, 7
+    // int shmem_c_m = tid >> 5;   // 0, 1, 2, 3, 4, 5, 6, 7
     int shmem_c_n = tid & 31;   // 0, 1, 2, 3, 4, ..., 31
-    int shmem_c_addr = OFFSET(shmem_c_m, shmem_c_n, LDN);
-    int gmem_c_addr = OFFSET(shmem_c_m, bx * BN + shmem_c_n, N);
+    int shmem_c_addr = OFFSET(load_a_smem_m, shmem_c_n, LDN);
+    int gmem_c_addr = OFFSET(load_a_smem_m, bx * BN + shmem_c_n, N);
 
     
 #pragma unroll
@@ -229,14 +229,14 @@ __global__ void gemm_m8n32k256x8_bz1(
     // int store_c_smem_addr = OFFSET(store_c_m, wid * 32 + store_c_n, 8 * 32 + 8);
     // int store_c_gmem_addr = OFFSET(store_c_m, store_c_n + bx * BN, N);
 
-    if (shmem_c_m < M) {
+    if (load_a_smem_m < M) {
         // #pragma unroll
         // for(int i=0; i<4; i++){
-        //     atomicAdd(((half2 *)(&c[store_c_gmem_addr + 2 * i])),
-        //               *((half2 *)(&s_b[store_c_smem_addr + 2 * i])));
+        //     atomicAdd(((half2 *)(&c[gmem_c_addr + 2 * i])),
+        //               *((half2 *)(&s_b[shmem_c_addr + 2 * i])));
         // }
-        c[gmem_c_addr] = smem[shmem_c_addr];
-        // atomicAdd(&c[gmem_c_addr], smem[shmem_c_addr]);
+        // c[gmem_c_addr] = smem[shmem_c_addr];
+        atomicAdd(&c[gmem_c_addr], smem[shmem_c_addr]);
     }
 }
 
@@ -359,7 +359,8 @@ __global__ void gemm_m8n64k128x8_bz1(
     __syncthreads();
 
     if (shmem_c_m < M) {
-        *(half2*)(&c[gmem_c_addr]) = *(half2*)(&smem[shmem_c_addr]);
+        // *(half2*)(&c[gmem_c_addr]) = *(half2*)(&smem[shmem_c_addr]);
+        atomicAdd((half2*)(&c[gmem_c_addr]), *(half2*)(&smem[shmem_c_addr]));
     }
 }
 

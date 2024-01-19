@@ -1,10 +1,17 @@
 import torch
 import time
-from hgemm.backend import hgemm
+import argparse
+from eed.backend import hgemm
 
-A = torch.rand((1, 6144), dtype=torch.float16, device='cuda')
-A_ = torch.rand((8, 6144), dtype=torch.float16, device='cuda')
-B = torch.rand((6144, 6144 * 4), dtype=torch.float16, device='cuda')
+parser = argparse.ArgumentParser()
+parser.add_argument('--M', type=int, default=1)
+parser.add_argument('--K', type=int, default=4096)
+parser.add_argument('--N', type=int, default=4096)
+args = parser.parse_args()
+
+A = torch.rand((1, args.K), dtype=torch.float16, device='cuda')
+A_ = torch.rand((args.M, args.K), dtype=torch.float16, device='cuda')
+B = torch.rand((args.K, args.N), dtype=torch.float16, device='cuda')
 
 # torch.cuda.cudart().cudaProfilerStart()  
 # torch_output = torch.matmul(A, B)
@@ -12,8 +19,8 @@ B = torch.rand((6144, 6144 * 4), dtype=torch.float16, device='cuda')
 
 # print(torch_output)
 
-C = torch.zeros((1, 6144 * 4), dtype=torch.float16, device='cuda')
-C_ = torch.zeros((128, 6144 * 4), dtype=torch.float16, device='cuda')
+C = torch.zeros((1, args.N), dtype=torch.float16, device='cuda')
+C_ = torch.zeros((args.M, args.N), dtype=torch.float16, device='cuda')
 
 torch.cuda.cudart().cudaProfilerStart()  
 hgemm(A, B, C)

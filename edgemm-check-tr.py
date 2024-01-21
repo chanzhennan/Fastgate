@@ -18,7 +18,7 @@ K = args.k
 N = args.n
 tc_func = gemm_m8n32k256x8_bt_bz2
 cc_func = fastgemv_extend
-split = 4
+split = 1
 
 A = torch.empty((M, K), dtype=torch.float16, device="cuda").normal_(mean=0., std=0.5)
 B = torch.empty((K, N), dtype=torch.float16, device="cuda").normal_(mean=1., std=0.5)
@@ -58,12 +58,12 @@ col_idx = idx % N
 print(C_[row_idx, col_idx].item(), C[row_idx, col_idx].item())
 
 
-torch.cuda.cudart().cudaProfilerStart()
-cc_func(B_T, A, C_f)
-torch.cuda.cudart().cudaProfilerStop()
-# print(C_f)
+# torch.cuda.cudart().cudaProfilerStart()
+# cc_func(B_T, A, C_f)
+# torch.cuda.cudart().cudaProfilerStop()
+# # print(C_f)
 
-all_close = torch.allclose(C_f, C_, rtol=1e-0, atol=1e-2)
+# all_close = torch.allclose(C_f, C_, rtol=1e-0, atol=1e-2)
 # print("fastgemv verse torch: ", all_close)
 
 torch_dur = 0
@@ -103,16 +103,16 @@ for _ in range(100):
     edgemm_dur += (ed - st) * 10
 
 fastgemv_dur = 0
-for _ in range(10):
-    cc_func(B_T, A, C_f)
+# for _ in range(10):
+#     cc_func(B_T, A, C_f)
 
-for _ in range(100):
-    torch.cuda.synchronize()
-    st = time.time()
-    cc_func(B_T, A, C_f)
-    torch.cuda.synchronize()
-    ed = time.time()
-    fastgemv_dur += (ed - st) * 10
+# for _ in range(100):
+#     torch.cuda.synchronize()
+#     st = time.time()
+#     cc_func(B_T, A, C_f)
+#     torch.cuda.synchronize()
+#     ed = time.time()
+#     fastgemv_dur += (ed - st) * 10
 
 # print('torch - cublas - edgemm - fastgemv: %.4f ms - %.4f ms - %.4f ms - %.4f ms' % 
 #     (torch_dur, cublas_dur, edgemm_dur, fastgemv_dur))

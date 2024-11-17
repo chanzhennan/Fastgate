@@ -83,8 +83,7 @@ __global__ void gemv_fp16(half* mat, half* vec, half* res, unsigned int n,
     unsigned int j = start_idx;
     unsigned int next_j;
 
-
-// 只加载一次数据
+    // 只加载一次数据
     if (start_idx < n >> 3) {  // 确保不越界
         if (threadIdx.y == 0) {
             cp_async<float4>(&vec_shared[0][start_idx], 
@@ -92,24 +91,26 @@ __global__ void gemv_fp16(half* mat, half* vec, half* res, unsigned int n,
         }
         cp_async<float4>(&mat_shared[0][threadIdx.y][start_idx],
                         &reinterpret_cast<float4*>(mat)[row * (n >> 3) + start_idx]);
+        __pipeline_commit();
     }
-    __pipeline_commit();
     __pipeline_wait_prior(0);
-
+    __syncthreads();
 
 #pragma unroll
   for (int iter = 0; iter < DIV_UP(num_per_thread, 8); iter++) {
     j = start_idx + iter * blockDim.x;
     next_j = start_idx + (iter + 1) * blockDim.x;
 
-    // 加载下一个stage的数据
+    // 预取下一个stage的数据
     if (next_j < n >> 3) {
         if (threadIdx.y == 0) {
-            vec_shared[next_stage][start_idx] = reinterpret_cast<float4*>(vec)[next_j];
+            cp_async<float4>(&vec_shared[next_stage][start_idx], 
+                            &reinterpret_cast<float4*>(vec)[next_j]);
         }
-        mat_shared[next_stage][threadIdx.y][start_idx] = reinterpret_cast<float4*>(mat)[row * (n >> 3) + next_j];
+        cp_async<float4>(&mat_shared[next_stage][threadIdx.y][start_idx],
+                        &reinterpret_cast<float4*>(mat)[row * (n >> 3) + next_j]);
+        __pipeline_commit();
     }
-
 
     // 计算当前stage的数据
     if (j < n >> 3) {
@@ -133,7 +134,9 @@ __global__ void gemv_fp16(half* mat, half* vec, half* res, unsigned int n,
       sum += __half2float(vec_h4->x) * __half2float(mat_h4->x);
       sum += __half2float(vec_h4->y) * __half2float(mat_h4->y);
     }
+    __pipeline_wait_prior(0);
     __syncthreads();
+
     stage = next_stage;
     next_stage = (next_stage + 1) % STAGE;
 
@@ -164,4 +167,72 @@ __global__ void gemv_fp16(half* mat, half* vec, half* res, unsigned int n,
     res[row] = __float2half(sum);
   }
 }
+
 #endif  // FAST_GEMV_CZN_CUH_
+
+
+
+
+
+
+
+// __global__ void gemv_fp16(half* mat, half* vec, half* res, unsigned int n,
+//                           unsigned int num_per_thread) {
+//   float sum = 0;
+//   // each thread load num_per_thread elements from global
+//   unsigned int tid = threadIdx.x;
+//   unsigned int row = blockIdx.y * blockDim.y + threadIdx.y;
+//   unsigned int start_idx = threadIdx.x;
+//   float4* mat4 = reinterpret_cast<float4*>(mat);
+//   float4* vec4 = reinterpret_cast<float4*>(vec);
+
+// #pragma unroll
+//   for (int iter = 0; iter < DIV_UP(num_per_thread, 8); iter++) {
+//     unsigned int j = start_idx + iter * blockDim.x;
+//     if (j < n >> 3) {
+//       float4 vec_val = vec4[j];
+//       float4 mat_val = mat4[row * (n >> 3) + j];
+//       half2* vec_h1 = (half2*)&vec_val.x;
+//       half2* vec_h2 = (half2*)&vec_val.y;
+//       half2* vec_h3 = (half2*)&vec_val.z;
+//       half2* vec_h4 = (half2*)&vec_val.w;
+//       half2* mat_h1 = (half2*)&mat_val.x;
+//       half2* mat_h2 = (half2*)&mat_val.y;
+//       half2* mat_h3 = (half2*)&mat_val.z;
+//       half2* mat_h4 = (half2*)&mat_val.w;
+//       sum += __half2float(vec_h1->x) * __half2float(mat_h1->x);
+//       sum += __half2float(vec_h1->y) * __half2float(mat_h1->y);
+//       sum += __half2float(vec_h2->x) * __half2float(mat_h2->x);
+//       sum += __half2float(vec_h2->y) * __half2float(mat_h2->y);
+//       sum += __half2float(vec_h3->x) * __half2float(mat_h3->x);
+//       sum += __half2float(vec_h3->y) * __half2float(mat_h3->y);
+//       sum += __half2float(vec_h4->x) * __half2float(mat_h4->x);
+//       sum += __half2float(vec_h4->y) * __half2float(mat_h4->y);
+//     }
+//   }
+
+//   sum = warpReduceSumFloat(sum, blockDim.x);
+
+//   if (blockDim.x <= WARP_SIZE) {
+//     if (tid == 0) {
+//       res[row] = __float2half(sum);
+//     }
+//     return;
+//   }
+
+//   // Shared mem for partial sums (one per warp in the block)
+//   static __shared__ float warpLevelSums[SHARED_MEM_MAX_ROWS][WARP_SIZE];
+//   const int laneId = threadIdx.x % WARP_SIZE;
+//   const int warpId = threadIdx.x / WARP_SIZE;
+//   if (laneId == 0) warpLevelSums[threadIdx.y][warpId] = sum;
+//   __syncthreads();
+//   // read from shared memory only if that warp existed
+//   sum = (threadIdx.x < blockDim.x / WARP_SIZE)
+//             ? warpLevelSums[threadIdx.y][laneId]
+//             : 0.0;
+//   // Final reduce using first warp
+//   if (warpId == 0) sum = warpReduceSumFloat(sum, blockDim.x / WARP_SIZE);
+//   if (tid == 0) {
+//     res[row] = __float2half(sum);
+//   }
+// }

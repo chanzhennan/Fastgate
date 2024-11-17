@@ -19,6 +19,9 @@
 
 #define DIV_UP(x, y) ((x) + (y) - 1) / (y)
 
+#define L2_CACHEHINT(x) ".L2::" #x ""
+
+
 __device__ __forceinline__ float warpReduceSumFloat(float sum,
                                                unsigned int threadNum) {
   if (threadNum >= 32)
@@ -32,6 +35,36 @@ __device__ __forceinline__ float warpReduceSumFloat(float sum,
   if (threadNum >= 2)
     sum += __shfl_down_sync(0xffffffff, sum, 1);  // 0-1, 2-3, 4-5, etc.
   return sum;
+}
+
+
+template<typename AccessType>
+struct CpAsync {
+    template<typename T>
+    __device__ void operator()(int ptr, const T* __restrict__ src, bool mask = true) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+        constexpr int size = sizeof(AccessType);
+        if constexpr (size == 16) {
+            asm volatile(
+                "cp.async.cg.shared.global [%0], [%1], %2;\n" 
+                :: "r"(ptr), "l"(src), "n"(size));
+        }
+        else {
+            asm volatile(
+                "cp.async.ca.shared.global [%0], [%1], %2;\n" 
+                :: "r"(ptr), "l"(src), "n"(size));
+        }
+#else
+        assert(false && "Requires SM80+");
+#endif
+    }
+};
+
+template<typename T>
+__device__ __forceinline__ void cp_async(void* dst, const void* src) {
+    CpAsync<T> cp;
+    unsigned offset = __cvta_generic_to_shared(dst);
+    cp(offset, (const T*)src);
 }
 
 template<int STAGE = 2>
@@ -50,13 +83,19 @@ __global__ void gemv_fp16(half* mat, half* vec, half* res, unsigned int n,
     unsigned int j = start_idx;
     unsigned int next_j;
 
-    if (j < n >> 3) {
+
+// 只加载一次数据
+    if (start_idx < n >> 3) {  // 确保不越界
         if (threadIdx.y == 0) {
-            vec_shared[0][j] = reinterpret_cast<float4*>(vec)[j];
+            cp_async<float4>(&vec_shared[0][start_idx], 
+                           &reinterpret_cast<float4*>(vec)[start_idx]);
         }
-        mat_shared[0][threadIdx.y][j] = reinterpret_cast<float4*>(mat)[row * (n >> 3) + j];
+        cp_async<float4>(&mat_shared[0][threadIdx.y][start_idx],
+                        &reinterpret_cast<float4*>(mat)[row * (n >> 3) + start_idx]);
     }
-    __syncthreads();
+    __pipeline_commit();
+    __pipeline_wait_prior(0);
+
 
 #pragma unroll
   for (int iter = 0; iter < DIV_UP(num_per_thread, 8); iter++) {
@@ -70,6 +109,8 @@ __global__ void gemv_fp16(half* mat, half* vec, half* res, unsigned int n,
         }
         mat_shared[next_stage][threadIdx.y][start_idx] = reinterpret_cast<float4*>(mat)[row * (n >> 3) + next_j];
     }
+
+
     // 计算当前stage的数据
     if (j < n >> 3) {
       // 这里使用j而不是start_idx，可以让不同线程访问不同的数据

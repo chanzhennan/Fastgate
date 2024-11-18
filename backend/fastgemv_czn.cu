@@ -34,5 +34,6 @@ void fastgemv(at::Tensor A, at::Tensor B, at::Tensor C){
         reinterpret_cast<half *>(B.data_ptr<at::Half>()),  // [K, 1] 向量
         reinterpret_cast<half *>(C.data_ptr<at::Half>()),  // [N, 1] 结果
         vec_height_,  // K
+        mat_height_,
         num_per_thread);  // K/128
 }

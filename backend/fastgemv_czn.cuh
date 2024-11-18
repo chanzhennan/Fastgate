@@ -81,6 +81,7 @@ __inline__ __device__ void barrier_wait(__mbarrier_t* bar, __mbarrier_token_t to
     }
     __syncthreads();  // 同步所有线程
 }
+
 template<int STAGE = 3>
 __global__ void gemv_fp16(half* mat, half* vec, half* res, unsigned int k, unsigned int n,
                           unsigned int num_per_thread) {
@@ -92,43 +93,63 @@ __global__ void gemv_fp16(half* mat, half* vec, half* res, unsigned int k, unsig
     __shared__ float4 vec_shared[STAGE][128];
     __shared__ float4 mat_shared[STAGE][4][128];
 
-
-      // 打印全局内存中前三个stage的数据
-    if (threadIdx.x == 0 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0) {
-        printf("Global memory data for first 3 stages:\n");
-        for (int s = 0; s < STAGE; s++) {
-            size_t curr_j = s * blockDim.x;
-            if (curr_j < k >> 3) {
-                float4 vec_tmp = reinterpret_cast<float4*>(vec)[curr_j];
-                float4 mat_tmp = reinterpret_cast<float4*>(mat)[curr_j];
-                
-                half2* vec_h1 = (half2*)&vec_tmp.x;
-                half2* vec_h2 = (half2*)&vec_tmp.y;
-                half2* vec_h3 = (half2*)&vec_tmp.z;
-                half2* vec_h4 = (half2*)&vec_tmp.w;
-                
-                half2* mat_h1 = (half2*)&mat_tmp.x;
-                half2* mat_h2 = (half2*)&mat_tmp.y;
-                half2* mat_h3 = (half2*)&mat_tmp.z;
-                half2* mat_h4 = (half2*)&mat_tmp.w;
-                
-                printf("Stage %d:\n", s);
-                printf("Vec[%d]: %f %f %f %f %f %f %f %f\n", 
-                       curr_j,
-                       __half2float(vec_h1->x), __half2float(vec_h1->y),
-                       __half2float(vec_h2->x), __half2float(vec_h2->y),
-                       __half2float(vec_h3->x), __half2float(vec_h3->y),
-                       __half2float(vec_h4->x), __half2float(vec_h4->y));
-                printf("Mat[%d]: %f %f %f %f %f %f %f %f\n", 
-                       curr_j,
-                       __half2float(mat_h1->x), __half2float(mat_h1->y),
-                       __half2float(mat_h2->x), __half2float(mat_h2->y),
-                       __half2float(mat_h3->x), __half2float(mat_h3->y),
-                       __half2float(mat_h4->x), __half2float(mat_h4->y));
-            }
-        }
-        printf("\n");
+    if (row >= n) {  // 检查是否超出有效范围
+        printf("Warning: Invalid row %d (n=%d)\n", row, n);
+        return;
     }
+
+    // Add this near the top of the kernel
+    bool should_print = (row == 29 && tid == 0);
+
+    // if (should_print) {
+    //     printf("\n=== Basic Thread Information ===\n");
+    //     printf("Thread ID (tid): %u\n", tid);
+    //     printf("Row: %u\n", row);
+    //     printf("Block Dims: (%d, %d, %d)\n", blockDim.x, blockDim.y, blockDim.z);
+    //     printf("Block Index: (%d, %d, %d)\n", blockIdx.x, blockIdx.y, blockIdx.z);
+    //     printf("Thread Index: (%d, %d, %d)\n", threadIdx.x, threadIdx.y, threadIdx.z);
+    //     printf("Matrix Dimensions - K: %u, N: %u\n", k, n);
+    //     printf("Num per thread: %u\n", num_per_thread);
+    //     printf("Start Index: %u\n", start_idx);
+    //     printf("===========================\n\n");
+    // }
+
+    //   // 打印全局内存中前三个stage的数据
+    // if (should_print)  {
+    //     printf("Global memory data for first 3 stages:\n");
+    //     for (int s = 0; s < STAGE; s++) {
+    //         size_t curr_j = s * blockDim.x;
+    //         if (curr_j < k >> 3) {
+    //             float4 vec_tmp = reinterpret_cast<float4*>(vec)[curr_j];
+    //             float4 mat_tmp = reinterpret_cast<float4*>(mat)[curr_j];
+                
+    //             half2* vec_h1 = (half2*)&vec_tmp.x;
+    //             half2* vec_h2 = (half2*)&vec_tmp.y;
+    //             half2* vec_h3 = (half2*)&vec_tmp.z;
+    //             half2* vec_h4 = (half2*)&vec_tmp.w;
+                
+    //             half2* mat_h1 = (half2*)&mat_tmp.x;
+    //             half2* mat_h2 = (half2*)&mat_tmp.y;
+    //             half2* mat_h3 = (half2*)&mat_tmp.z;
+    //             half2* mat_h4 = (half2*)&mat_tmp.w;
+                
+    //             printf("tid = %d, Stage %d:\n", tid, s);
+    //             printf("Vec[%d]: %f %f %f %f %f %f %f %f\n", 
+    //                    curr_j,
+    //                    __half2float(vec_h1->x), __half2float(vec_h1->y),
+    //                    __half2float(vec_h2->x), __half2float(vec_h2->y),
+    //                    __half2float(vec_h3->x), __half2float(vec_h3->y),
+    //                    __half2float(vec_h4->x), __half2float(vec_h4->y));
+    //             printf("Mat[%d]: %f %f %f %f %f %f %f %f\n", 
+    //                    curr_j,
+    //                    __half2float(mat_h1->x), __half2float(mat_h1->y),
+    //                    __half2float(mat_h2->x), __half2float(mat_h2->y),
+    //                    __half2float(mat_h3->x), __half2float(mat_h3->y),
+    //                    __half2float(mat_h4->x), __half2float(mat_h4->y));
+    //         }
+    //     }
+    //     printf("\n");
+    // }
 
     // 创建pipeline
     cuda::pipeline<cuda::thread_scope_thread> pipe = cuda::make_pipeline();
@@ -151,6 +172,8 @@ __global__ void gemv_fp16(half* mat, half* vec, half* res, unsigned int k, unsig
         }
         pipe.producer_commit();
     }
+    __syncthreads();
+
 
     // 主循环处理
     int stage = 0;
@@ -159,21 +182,20 @@ __global__ void gemv_fp16(half* mat, half* vec, half* res, unsigned int k, unsig
         if (curr_j >= k >> 3) break;
 
         // 等待当前阶段数据就绪
-        cuda::pipeline_consumer_wait_prior<STAGE - 1>(pipe);
+        // cuda::pipeline_consumer_wait_prior<STAGE - 1>(pipe);
+        pipe.consumer_wait();
         __syncthreads();
-
-        // 打印共享内存的值
-        if (threadIdx.x == 0 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0) {
-            half2* vec_h = (half2*)&vec_shared[stage][0];
-            half2* mat_h = (half2*)&mat_shared[stage][0][0];
-            printf("Stage %d, First few values:\n", stage);
-            printf("Vec: %f %f %f %f\n", 
-                   __half2float(vec_h[0].x), __half2float(vec_h[0].y),
-                   __half2float(vec_h[1].x), __half2float(vec_h[1].y));
-            printf("Mat: %f %f %f %f\n", 
-                   __half2float(mat_h[0].x), __half2float(mat_h[0].y),
-                   __half2float(mat_h[1].x), __half2float(mat_h[1].y));
-        }
+        // if (should_print) {
+        //   half2* vec_h = (half2*)&vec_shared[stage][0];
+        //   half2* mat_h = (half2*)&mat_shared[stage][0][0];
+        //   printf("tid = %d, Stage %d, First few values:\n", tid, stage);
+        //   printf("Vec: %f %f %f %f\n", 
+        //         __half2float(vec_h[0].x), __half2float(vec_h[0].y),
+        //         __half2float(vec_h[1].x), __half2float(vec_h[1].y));
+        //   printf("Mat: %f %f %f %f\n", 
+        //         __half2float(mat_h[0].x), __half2float(mat_h[0].y),
+        //         __half2float(mat_h[1].x), __half2float(mat_h[1].y));
+        // }
 
         // 处理当前阶段数据
         float4 vec_val = vec_shared[stage][start_idx];
@@ -200,7 +222,7 @@ __global__ void gemv_fp16(half* mat, half* vec, half* res, unsigned int k, unsig
 
         __syncthreads();
         pipe.consumer_release();
-
+        __syncthreads();
         // 加载下一批数据
         size_t next_j = start_idx + (iter + STAGE) * blockDim.x;
         if (next_j < k >> 3) {
@@ -220,11 +242,15 @@ __global__ void gemv_fp16(half* mat, half* vec, half* res, unsigned int k, unsig
 
         stage = (stage + 1) % STAGE;
     }
+    // if(row == 185) {
+    //   printf("row = %d, tid = %d, Final sum: %f\n", row, tid, sum);
+    // }
 
   sum = warpReduceSumFloat(sum, blockDim.x);
 
   if (blockDim.x <= WARP_SIZE) {
     if (tid == 0) {
+      // printf("11 row: %d, sum: %f\n", row, sum);
       res[row] = __float2half(sum);
     }
     return;
@@ -243,8 +269,11 @@ __global__ void gemv_fp16(half* mat, half* vec, half* res, unsigned int k, unsig
   // Final reduce using first warp
   if (warpId == 0) sum = warpReduceSumFloat(sum, blockDim.x / WARP_SIZE);
   if (tid == 0) {
+    // printf("row: %d, sum: %f\n", row, sum);
     res[row] = __float2half(sum);
   }
+
+
 }
 
 

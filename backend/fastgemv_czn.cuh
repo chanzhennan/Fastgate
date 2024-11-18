@@ -16,7 +16,7 @@
 #include "utility.cuh"
 
 #define WARP_SIZE 32
-#define SHARED_MEM_MAX_ROWS 64
+#define SHARED_MEM_MAX_ROWS 4
 #define MAX_THREADS_PER_BLOCK 1024
 
 #define DIV_UP(x, y) ((x) + (y) - 1) / (y)
@@ -98,75 +98,24 @@ __global__ void gemv_fp16(half* mat, half* vec, half* res, unsigned int k, unsig
         return;
     }
 
-    // Add this near the top of the kernel
-    // bool should_print = (row == 29 && tid == 0);
-
-    // if (should_print) {
-    //     printf("\n=== Basic Thread Information ===\n");
-    //     printf("Thread ID (tid): %u\n", tid);
-    //     printf("Row: %u\n", row);
-    //     printf("Block Dims: (%d, %d, %d)\n", blockDim.x, blockDim.y, blockDim.z);
-    //     printf("Block Index: (%d, %d, %d)\n", blockIdx.x, blockIdx.y, blockIdx.z);
-    //     printf("Thread Index: (%d, %d, %d)\n", threadIdx.x, threadIdx.y, threadIdx.z);
-    //     printf("Matrix Dimensions - K: %u, N: %u\n", k, n);
-    //     printf("Num per thread: %u\n", num_per_thread);
-    //     printf("Start Index: %u\n", start_idx);
-    //     printf("===========================\n\n");
-    // }
-
-    //   // 打印全局内存中前三个stage的数据
-    // if (should_print)  {
-    //     printf("Global memory data for first 3 stages:\n");
-    //     for (int s = 0; s < STAGE; s++) {
-    //         size_t curr_j = s * blockDim.x;
-    //         if (curr_j < k >> 3) {
-    //             float4 vec_tmp = reinterpret_cast<float4*>(vec)[curr_j];
-    //             float4 mat_tmp = reinterpret_cast<float4*>(mat)[curr_j];
-                
-    //             half2* vec_h1 = (half2*)&vec_tmp.x;
-    //             half2* vec_h2 = (half2*)&vec_tmp.y;
-    //             half2* vec_h3 = (half2*)&vec_tmp.z;
-    //             half2* vec_h4 = (half2*)&vec_tmp.w;
-                
-    //             half2* mat_h1 = (half2*)&mat_tmp.x;
-    //             half2* mat_h2 = (half2*)&mat_tmp.y;
-    //             half2* mat_h3 = (half2*)&mat_tmp.z;
-    //             half2* mat_h4 = (half2*)&mat_tmp.w;
-                
-    //             printf("tid = %d, Stage %d:\n", tid, s);
-    //             printf("Vec[%d]: %f %f %f %f %f %f %f %f\n", 
-    //                    curr_j,
-    //                    __half2float(vec_h1->x), __half2float(vec_h1->y),
-    //                    __half2float(vec_h2->x), __half2float(vec_h2->y),
-    //                    __half2float(vec_h3->x), __half2float(vec_h3->y),
-    //                    __half2float(vec_h4->x), __half2float(vec_h4->y));
-    //             printf("Mat[%d]: %f %f %f %f %f %f %f %f\n", 
-    //                    curr_j,
-    //                    __half2float(mat_h1->x), __half2float(mat_h1->y),
-    //                    __half2float(mat_h2->x), __half2float(mat_h2->y),
-    //                    __half2float(mat_h3->x), __half2float(mat_h3->y),
-    //                    __half2float(mat_h4->x), __half2float(mat_h4->y));
-    //         }
-    //     }
-    //     printf("\n");
-    // }
-
     // 创建pipeline
     cuda::pipeline<cuda::thread_scope_thread> pipe = cuda::make_pipeline();
+    size_t tmp_j;
 
     // 预加载所有pipeline阶段
+    #pragma unroll
     for (int stage = 0; stage < STAGE; ++stage) {
         pipe.producer_acquire();
-        size_t curr_j = start_idx + stage * blockDim.x;
-        if (curr_j < k >> 3) {
-            if (threadIdx.y == 0) {
+        tmp_j = start_idx + stage * blockDim.x;
+        if (tmp_j < k >> 3) {
+            // if (threadIdx.y == 0) {
                 cuda::memcpy_async(&vec_shared[stage][start_idx],
-                                 &reinterpret_cast<float4*>(vec)[curr_j],
+                                 &reinterpret_cast<float4*>(vec)[tmp_j],
                                  sizeof(float4),
                                  pipe);
-            }
+            // }
             cuda::memcpy_async(&mat_shared[stage][threadIdx.y][start_idx],
-                             &reinterpret_cast<float4*>(mat)[row * (k >> 3) + curr_j],
+                             &reinterpret_cast<float4*>(mat)[row * (k >> 3) + tmp_j],
                              sizeof(float4),
                              pipe);
         }
@@ -176,25 +125,15 @@ __global__ void gemv_fp16(half* mat, half* vec, half* res, unsigned int k, unsig
 
     // 主循环处理
     int stage = 0;
+    #pragma unroll
     for (size_t iter = 0; iter < DIV_UP(num_per_thread, 8); iter++) {
-        size_t curr_j = start_idx + iter * blockDim.x;
-        if (curr_j >= k >> 3) break;
+        tmp_j = start_idx + iter * blockDim.x;
+        if (tmp_j >= k >> 3) break;
 
         // 等待当前阶段数据就绪
-        // cuda::pipeline_consumer_wait_prior<STAGE - 2>(pipe);
-        pipe.consumer_wait();
+        cuda::pipeline_consumer_wait_prior<STAGE - 1>(pipe);
+        // pipe.consumer_wait();
         __syncthreads();
-        // if (should_print) {
-        //   half2* vec_h = (half2*)&vec_shared[stage][0];
-        //   half2* mat_h = (half2*)&mat_shared[stage][0][0];
-        //   printf("tid = %d, Stage %d, First few values:\n", tid, stage);
-        //   printf("Vec: %f %f %f %f\n", 
-        //         __half2float(vec_h[0].x), __half2float(vec_h[0].y),
-        //         __half2float(vec_h[1].x), __half2float(vec_h[1].y));
-        //   printf("Mat: %f %f %f %f\n", 
-        //         __half2float(mat_h[0].x), __half2float(mat_h[0].y),
-        //         __half2float(mat_h[1].x), __half2float(mat_h[1].y));
-        // }
 
         // 处理当前阶段数据
         float4 vec_val = vec_shared[stage][start_idx];
@@ -221,17 +160,17 @@ __global__ void gemv_fp16(half* mat, half* vec, half* res, unsigned int k, unsig
 
         pipe.consumer_release();
         // 加载下一批数据
-        size_t next_j = start_idx + (iter + STAGE) * blockDim.x;
-        if (next_j < k >> 3) {
+        tmp_j = start_idx + (iter + STAGE) * blockDim.x;
+        if (tmp_j < k >> 3) {
             pipe.producer_acquire();
-            if (threadIdx.y == 0) {
+            // if (threadIdx.y == 0) {
                 cuda::memcpy_async(&vec_shared[stage][start_idx],
-                                 &reinterpret_cast<float4*>(vec)[next_j],
+                                 &reinterpret_cast<float4*>(vec)[tmp_j],
                                  sizeof(float4),
                                  pipe);
-            }
+            // }
             cuda::memcpy_async(&mat_shared[stage][threadIdx.y][start_idx],
-                             &reinterpret_cast<float4*>(mat)[row * (k >> 3) + next_j],
+                             &reinterpret_cast<float4*>(mat)[row * (k >> 3) + tmp_j],
                              sizeof(float4),
                              pipe);
             pipe.producer_commit();
@@ -239,15 +178,11 @@ __global__ void gemv_fp16(half* mat, half* vec, half* res, unsigned int k, unsig
 
         stage = (stage + 1) % STAGE;
     }
-    // if(row == 185) {
-    //   printf("row = %d, tid = %d, Final sum: %f\n", row, tid, sum);
-    // }
 
   sum = warpReduceSumFloat(sum, blockDim.x);
 
   if (blockDim.x <= WARP_SIZE) {
     if (tid == 0) {
-      // printf("11 row: %d, sum: %f\n", row, sum);
       res[row] = __float2half(sum);
     }
     return;
@@ -266,7 +201,6 @@ __global__ void gemv_fp16(half* mat, half* vec, half* res, unsigned int k, unsig
   // Final reduce using first warp
   if (warpId == 0) sum = warpReduceSumFloat(sum, blockDim.x / WARP_SIZE);
   if (tid == 0) {
-    // printf("row: %d, sum: %f\n", row, sum);
     res[row] = __float2half(sum);
   }
 

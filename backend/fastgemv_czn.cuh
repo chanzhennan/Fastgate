@@ -82,7 +82,7 @@ __inline__ __device__ void barrier_wait(__mbarrier_t* bar, __mbarrier_token_t to
     __syncthreads();  // 同步所有线程
 }
 
-template<int STAGE = 3>
+template<int STAGE = 4>
 __global__ void gemv_fp16(half* mat, half* vec, half* res, unsigned int k, unsigned int n,
                           unsigned int num_per_thread) {
     float sum = 0;
@@ -99,7 +99,7 @@ __global__ void gemv_fp16(half* mat, half* vec, half* res, unsigned int k, unsig
     }
 
     // Add this near the top of the kernel
-    bool should_print = (row == 29 && tid == 0);
+    // bool should_print = (row == 29 && tid == 0);
 
     // if (should_print) {
     //     printf("\n=== Basic Thread Information ===\n");
@@ -172,7 +172,6 @@ __global__ void gemv_fp16(half* mat, half* vec, half* res, unsigned int k, unsig
         }
         pipe.producer_commit();
     }
-    __syncthreads();
 
 
     // 主循环处理
@@ -182,7 +181,7 @@ __global__ void gemv_fp16(half* mat, half* vec, half* res, unsigned int k, unsig
         if (curr_j >= k >> 3) break;
 
         // 等待当前阶段数据就绪
-        // cuda::pipeline_consumer_wait_prior<STAGE - 1>(pipe);
+        // cuda::pipeline_consumer_wait_prior<STAGE - 2>(pipe);
         pipe.consumer_wait();
         __syncthreads();
         // if (should_print) {
@@ -220,9 +219,7 @@ __global__ void gemv_fp16(half* mat, half* vec, half* res, unsigned int k, unsig
         sum += __half2float(vec_h4->x) * __half2float(mat_h4->x);
         sum += __half2float(vec_h4->y) * __half2float(mat_h4->y);
 
-        __syncthreads();
         pipe.consumer_release();
-        __syncthreads();
         // 加载下一批数据
         size_t next_j = start_idx + (iter + STAGE) * blockDim.x;
         if (next_j < k >> 3) {

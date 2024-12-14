@@ -4,8 +4,8 @@ from eed.backend import hgemm, fastgemv
 from triton_mm import matmul as triton_matmul
 
 M = 1
-K = 8192
-N = 8192
+K = 4096
+N = 4096
 
 A = torch.rand((M, K), dtype=torch.float16, device='cuda')
 B = torch.rand((K, N), dtype=torch.float16, device='cuda')

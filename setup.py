@@ -31,7 +31,7 @@ setup(
             sources=sources,
             extra_compile_args = {
                 'cxx': ['-O3', '-fopenmp', '-lgomp'],
-                'nvcc': ['-O3',]}
+                'nvcc': ['-O3', '-v']}
         ),
     ],
     cmdclass={

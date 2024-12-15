@@ -16,6 +16,7 @@ void fastgemv(at::Tensor A, at::Tensor B, at::Tensor C){
     // C: [N, 1] 结果
     int mat_height_ = A.size(0);  // N
     int vec_height_ = B.size(0);  // K
+    int vec_width_ = B.size(1);  // M
 
     int block_dim_x = 128;
     int block_dim_y = 4;
@@ -28,6 +29,8 @@ void fastgemv(at::Tensor A, at::Tensor B, at::Tensor C){
     dim3 grid_dim(1, mat_height_ / block_dim_y);  // [1, N/4]
     dim3 block_dim(block_dim_x, block_dim_y);     // [128, 4]
 
+
+    if(vec_width_ == 1){
     // 现在矩阵是行优先存储，每行是连续的K个元素
     gemv_fp16<<<grid_dim, block_dim>>>(
         reinterpret_cast<half *>(A.data_ptr<at::Half>()),  // [N, K] 矩阵
@@ -36,4 +39,16 @@ void fastgemv(at::Tensor A, at::Tensor B, at::Tensor C){
         vec_height_,  // K
         mat_height_,
         num_per_thread);  // K/128
+    }
+    else if(vec_width_ == 2){
+        gemv_fp16_bs2<<<grid_dim, block_dim>>>(
+        reinterpret_cast<half *>(A.data_ptr<at::Half>()),  // [N, K] 矩阵
+        reinterpret_cast<half *>(B.data_ptr<at::Half>()),  // [K, 1] 向量
+        reinterpret_cast<half *>(C.data_ptr<at::Half>()),  // [N, 1] 结果
+        vec_height_,  // K
+        mat_height_,
+        num_per_thread);  // K/128
+    }
+
+    
 }

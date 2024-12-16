@@ -15,8 +15,8 @@ void fastgemv(at::Tensor A, at::Tensor B, at::Tensor C){
     // B: [K, 1] 向量 (原 [1, K] 转置而来)
     // C: [N, 1] 结果
     int mat_height_ = A.size(0);  // N
-    int vec_height_ = B.size(0);  // K
-    int vec_width_ = B.size(1);  // M
+    int vec_height_ = B.size(1);  // K
+    int vec_width_ = B.size(0);  // M
 
     int block_dim_x = 128;
     int block_dim_y = 4;
@@ -37,7 +37,7 @@ void fastgemv(at::Tensor A, at::Tensor B, at::Tensor C){
         reinterpret_cast<half *>(B.data_ptr<at::Half>()),  // [K, 1] 向量
         reinterpret_cast<half *>(C.data_ptr<at::Half>()),  // [N, 1] 结果
         vec_height_,  // K
-        mat_height_,
+        mat_height_,  // N
         num_per_thread);  // K/128
     }
     else if(vec_width_ == 2){
@@ -46,7 +46,7 @@ void fastgemv(at::Tensor A, at::Tensor B, at::Tensor C){
         reinterpret_cast<half *>(B.data_ptr<at::Half>()),  // [K, 1] 向量
         reinterpret_cast<half *>(C.data_ptr<at::Half>()),  // [N, 1] 结果
         vec_height_,  // K
-        mat_height_,
+        mat_height_,  // N
         num_per_thread);  // K/128
     }
 

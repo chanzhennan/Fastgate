@@ -13,15 +13,15 @@ def benchmark_shapes(shapes):
         B = torch.rand((K, N), dtype=torch.float16, device='cuda')
         C = torch.zeros((M, N), dtype=torch.float16, device='cuda')
         
-        A_T = A.transpose(0, 1).contiguous()
+        _A = A
         B_T = B.transpose(0, 1).contiguous()
-        C_T = C.transpose(0, 1).contiguous()
+        _C = torch.zeros((M, N), dtype=torch.float16, device='cuda')
 
         # Warmup
-        for _ in range(10):
+        for _ in range(1):
             torch_output = torch.matmul(A, B)
             hgemm(A, B, C)
-            fastgemv(B_T, A_T, C_T)
+            fastgemv(B_T, _A, _C)
 
         # Benchmark torch.matmul
         torch_dur = 0
@@ -50,37 +50,38 @@ def benchmark_shapes(shapes):
             torch.cuda.synchronize()
             st = time.time()
             _ = torch.empty((N, M), dtype=torch.float16, device='cuda')
-            fastgemv(B_T, A_T, C_T)
+            fastgemv(B_T, _A, _C)
             torch.cuda.synchronize()
             ed = time.time()
             fastgemv_dur += (ed - st) * 10
 
         # Verify results
-        all_close_cublas = torch.allclose(torch_output, C, rtol=1e-2, atol=1e-4)
-
-        if not all_close_cublas:
-            print(f"cuBLAS is not correct for shape {M}x{K}x{N}")
-            max_diff = torch.max(torch.abs(torch_output - C))
-            print(f"Max diff: {max_diff}")
-
-
-        all_close_fastgemv = torch.allclose(torch_output, C_T.transpose(0, 1), rtol=1e-2, atol=1e-4)
-        all_close_fastgemv_cublas = torch.allclose(C, C_T.transpose(0, 1), rtol=1e-2, atol=1e-4)
+        all_close_cublas_torch = torch.allclose(torch_output, C, rtol=1e-2, atol=1e-4)
+        all_close_fastgemv_torch = torch.allclose(torch_output, _C, rtol=1e-2, atol=1e-4)
+        all_close_fastgemv_cublas = torch.allclose(C, _C, rtol=1e-2, atol=1e-4)
 
         results.append({
             'shape': (M, K, N),
             'torch_time': torch_dur,
             'cublas_time': cublas_dur,
             'fastgemv_time': fastgemv_dur,
-            'fastgemv_cublas_ratio': fastgemv_dur / cublas_dur,
-            'cublas_correct': all_close_cublas,
-            'fastgemv_correct': all_close_fastgemv,
+            'fastgemv_cublas_ratio': f'{(fastgemv_dur / cublas_dur * 100):.2f}%',
+            'cublas_torch_correct': all_close_cublas_torch,
+            'fastgemv_torch_correct': all_close_fastgemv_torch,
             'fastgemv_cublas_correct': all_close_fastgemv_cublas
         })
 
+        if not all_close_fastgemv_torch:
+            print(f"cuBLAS is not correct for shape {M}x{K}x{N}")
+            max_diff = torch.max(torch.abs(torch_output - C))
+            print(f"Max diff: {max_diff}")
+            print(f"torch_output: {torch_output[0, :10]}")
+            print(f"C: {C[0, :10]}")
+            print(f"C_T: {_C[0, :10]}")
+
         print(f'Shape {M}x{K}x{N}:')
         print(f'torch[mm] - cublas - fastgemv: {torch_dur:.4f} ms - {cublas_dur:.4f} ms - {fastgemv_dur:.4f} ms')
-        print(f'Correctness - cublas: {all_close_cublas}, fastgemv: {all_close_fastgemv}, fastgemv_cublas: {all_close_fastgemv_cublas}')
+        print(f'Correctness - cublas: {all_close_cublas_torch}, fastgemv: {all_close_fastgemv_torch}, fastgemv_cublas: {all_close_fastgemv_cublas}')
 
         
         # print(f'fastgemv_cublas_ratio: {fastgemv_dur / cublas_dur:.4f}')
@@ -127,8 +128,9 @@ results = benchmark_shapes(shapes_to_test)
 
 # Print summary
 print("\nSummary:")
-print("Shape (M,K,N) | Torch (ms) | cuBLAS (ms) | FastGEMV (ms) | FastGEMV_cublas_ratio | cuBLAS correct | FastGEMV correct | FastGEMV_cublas correct")
-print("-" * 100)
+print(f"{'Shape (M,K,N)':<15} | {'Torch (ms)':<10} | {'cuBLAS (ms)':<11} | {'FastGEMV (ms)':<13} | {'FastGEMV/cuBLAS':<15} | {'cuBLAS_Torch':<15} | {'FastGEMV_Torch':<15} | {'FastGEMV_cuBLAS':<15}")
+print("-" * 130)
+
 for r in results:
-    shape = r['shape']
-    print(f"{shape} | {r['torch_time']:.4f} | {r['cublas_time']:.4f} | {r['fastgemv_time']:.4f} | {r['fastgemv_cublas_ratio']:.4f} | {r['cublas_correct']} | {r['fastgemv_correct']} | {r['fastgemv_cublas_correct']}")
+    shape = f"({r['shape'][0]},{r['shape'][1]},{r['shape'][2]})"
+    print(f"{shape:<15} | {r['torch_time']:>10.4f} | {r['cublas_time']:>11.4f} | {r['fastgemv_time']:>13.4f} | {r['fastgemv_cublas_ratio']:>15} | {str(r['cublas_torch_correct']):>15} | {str(r['fastgemv_torch_correct']):>15} | {str(r['fastgemv_cublas_correct']):>15}")

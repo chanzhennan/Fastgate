@@ -18,11 +18,12 @@ def benchmark_shapes(shapes):
         _C = torch.zeros((M, N), dtype=torch.float16, device='cuda')
 
         # Warmup
-        for _ in range(1):
+        for _ in range(10):
             torch_output = torch.matmul(A, B)
             hgemm(A, B, C)
             fastgemv(B_T, _A, _C)
 
+        # import pdb; pdb.set_trace()
         # Benchmark torch.matmul
         torch_dur = 0
         for _ in range(10):
@@ -108,7 +109,7 @@ shapes_to_test = [
     (2, 4096, 4096),
     (2, 4096, 11008),
     (2, 11008, 4096),
-    # llama2-13b
+    # # llama2-13b
     (2, 5120, 5120),
     (2, 5120, 13824),
     (2, 13824, 5120),

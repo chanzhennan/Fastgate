@@ -1,4 +1,5 @@
 
+
 __global__ void gemv_fp16_bs2(half* mat, half* vec, half* res, unsigned int k, unsigned int n,
                           unsigned int num_per_thread) {
   float sum[2] = {0.f, 0.f};

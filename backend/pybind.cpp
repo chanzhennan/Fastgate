@@ -2,12 +2,14 @@
 #include <torch/extension.h>
 #include <torch/serialize/tensor.h>
 
-#include "hgemm.h"
-#include "edgemm.h"
-#include "flatgemm.h"
-#include "fastgemv.h"
-#include "edgemm_tr.h"
-#include "hgemm_tr.h"
+#include "hk/hgemm.h"
+#include "hk/edgemm.h"
+#include "hk/flatgemm.h"
+// #include "hk/fastgemv.h"
+#include "hk/edgemm_tr.h"
+#include "hk/hgemm_tr.h"
+#include "czn/fastgemm.h"
+
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m){
   // m.def("edgemm_m8n128k64x4_tr_amd", &edgemm_m8n128k64x4_tr_amd);
@@ -23,7 +25,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m){
   // m.def("edgemm", &edgemm);
   m.def("hgemm", &hgemm);
   // m.def("hgemm_tr", &hgemm_tr);
-  m.def("fastgemv", &fastgemv);
+  // m.def("fastgemv", &fastgemv);
   // m.def("fastgemv_int8", &fastgemv_int8);
   // m.def("fastgemv_tuned", &fastgemv_tuned);
   // m.def("fastgemv_extend", &fastgemv_extend);
@@ -45,4 +47,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m){
   // m.def("flat_gemm_m8n512k32x16", &flat_gemm_m8n512k32x16);
   // m.def("flat_gemm_m8n64k128x8", &flat_gemm_m8n64k128x8);
   // m.def("flat_gemm_m8n32k256x8", &flat_gemm_m8n32k256x8);
+
+  //czn
+  // m.def("fastgemv", &fastgemv);
+  m.def("fastgemm", &fastgemm);
+  m.def("mmanaive", &mmanaive);
 }

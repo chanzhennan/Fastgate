@@ -7,9 +7,10 @@
 #include <stdlib.h>
 #include <torch/extension.h>
 
+#include "fastgemm.h"
 #include "fastgemv_czn.cuh"
 
-void fastgemv(at::Tensor A, at::Tensor B, at::Tensor C){
+void fastgemm(at::Tensor A, at::Tensor B, at::Tensor C){
     // 输入已经转置:
     // A: [N, K] 矩阵 (原 [K, N] 转置而来)
     // B: [K, 1] 向量 (原 [1, K] 转置而来)
@@ -31,14 +32,14 @@ void fastgemv(at::Tensor A, at::Tensor B, at::Tensor C){
 
 
     if(vec_width_ == 1){
-    // 现在矩阵是行优先存储，每行是连续的K个元素
-    gemv_fp16<<<grid_dim, block_dim>>>(
-        reinterpret_cast<half *>(A.data_ptr<at::Half>()),  // [N, K] 矩阵
-        reinterpret_cast<half *>(B.data_ptr<at::Half>()),  // [K, 1] 向量
-        reinterpret_cast<half *>(C.data_ptr<at::Half>()),  // [N, 1] 结果
-        vec_height_,  // K
-        mat_height_,  // N
-        num_per_thread);  // K/128
+        // 现在矩阵是行优先存储，每行是连续的K个元素
+        gemv_fp16<<<grid_dim, block_dim>>>(
+            reinterpret_cast<half *>(A.data_ptr<at::Half>()),  // [N, K] 矩阵
+            reinterpret_cast<half *>(B.data_ptr<at::Half>()),  // [K, 1] 向量
+            reinterpret_cast<half *>(C.data_ptr<at::Half>()),  // [N, 1] 结果
+            vec_height_,  // K
+            mat_height_,  // N
+            num_per_thread);  // K/128
     }
     else if(vec_width_ == 2){
         gemv_fp16_bs2<<<grid_dim, block_dim>>>(

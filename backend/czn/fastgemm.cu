@@ -8,7 +8,7 @@
 #include <torch/extension.h>
 
 #include "fastgemm.h"
-#include "fastgemv_czn.cuh"
+#include "fastgemm.cuh"
 
 void fastgemm(at::Tensor A, at::Tensor B, at::Tensor C){
     // 输入已经转置:

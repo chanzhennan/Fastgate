@@ -51,5 +51,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m){
   //czn
   // m.def("fastgemv", &fastgemv);
   m.def("fastgemm", &fastgemm);
-  m.def("mmanaive", &mmanaive);
+  m.def("mma", &mma);
 }

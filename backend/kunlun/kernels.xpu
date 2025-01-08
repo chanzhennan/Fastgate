@@ -1,0 +1,36 @@
+#include "xpu/kernel/cluster.h"
+#include "xpu/kernel/cluster_partition.h"
+#include "xpu/kernel/cluster_primitive.h"
+
+// sigmoid'(z) = y * (1 - y)
+// y = sigmoid(x)
+__global__ void sigmoid_backward(float* x, float* x_grad, int length) {
+    int cid = core_id();
+    int ncores = core_num();
+    int tid = cid * cluster_num() + cluster_id();
+    int nthreads = cluster_num() * ncores;
+    const int buf_len = 512;
+    __simd__ float local[buf_len];
+    __simd__ float grad_local[buf_len];
+    int start = 0;
+    int end = 0;
+    partition(tid, nthreads, length, 16, &start, &end);
+    for (int64_t i = start; i < end; i += buf_len) {
+        int read_len = min(static_cast<int64_t>(buf_len), end - i);
+        GM2LM(x + i, local, read_len * sizeof(float));
+
+        // local = sigmoid(x)
+        primitive_mul<float>(-1.0f, local, local, read_len);
+        primitive_exp<float>(local, local, read_len);
+        primitive_add<float>(1.0f, local, local, read_len);
+        primitive_div<float>(1.0f, local, local, read_len);
+
+        // grad_local = local * (1 - local)
+        primitive_cast<float, float>(local, grad_local, read_len);
+        primitive_mul<float>(-1.0f, grad_local, grad_local, read_len);
+        primitive_add<float>(1.0f, grad_local, grad_local, read_len);
+        primitive_mul<float>(local, grad_local, grad_local, read_len);
+
+        LM2GM(grad_local, x_grad + i, read_len * sizeof(float));
+    }
+}

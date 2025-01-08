@@ -1,5 +1,5 @@
-# exact-efficient-decoding
-Operator and system optimization for LLM decoding.
+# speedgate
+Operator and system optimization for t2vi inference.
 
 ## op
 
@@ -11,12 +11,6 @@ Operator and system optimization for LLM decoding.
     * input_feat(MxK) * weight_t(N*K) ---> output_feat(MxN)
     * 需要满足：K 和 N 是128 的倍数
 
+## compile cuda && kunlun
 
-## update
-[23.10.15] edgemm_m8n128k64x4_tr_amd: wmma 16x16x16 with transposed weight for AMD practice.
-
-[23.10.14] edgemm_m8n128k64x4_amd: wmma 16x16x16 for AMD practice.
-
-[23.10.04] fastgemv_tuned: Try to improve fastgemv by larger fetching.
-
-[23.09.30] fastgemv_extend: Support M > 1 based on fastgemv for experimental purpose.
+python setup.py install

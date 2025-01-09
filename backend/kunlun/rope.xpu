@@ -1,0 +1,502 @@
+#include "xpu/kernel/cluster.h"
+#include "xpu/kernel/cluster_simd.h"
+#include "xpu/kernel/cluster_partition.h"
+#include "xpu/kernel/cluster_primitive.h"
+#include "xpu/kernel/cluster_debug.h"
+
+#define PI 3.14159265358979323846f
+const float PI_2 = 2 * PI;
+const float PI_2_RECIPROCAL = 1.0 / PI_2;
+
+template <typename T>
+__device__ inline void vload2_lm_macro(const T* x, float32x16_t& vl, float32x16_t& vh) {}
+#define VLOAD2_LM_MACRO(T, LOAD)                                                                \
+    template <>                                                                                 \
+    __device__ inline void vload2_lm_macro<T>(const T* x, float32x16_t& vl, float32x16_t& vh) { \
+        LOAD(x, vl, vh);                                                                        \
+    }
+VLOAD2_LM_MACRO(float, vload2_lm);
+VLOAD2_LM_MACRO(float16, vload2_lm);
+VLOAD2_LM_MACRO(bfloat16, vload2_lm_unordered);
+template <typename T>
+__device__ inline void vstore2_lm_macro(T* x, float32x16_t& vl, float32x16_t& vh) {}
+#define VSTORE2_LM_MACRO(T, STORE)                                                            \
+    template <>                                                                               \
+    __device__ inline void vstore2_lm_macro<T>(T * x, float32x16_t & vl, float32x16_t & vh) { \
+        STORE(x, vl, vh);                                                                     \
+    }
+VSTORE2_LM_MACRO(float, vstore2_lm);
+VSTORE2_LM_MACRO(float16, vstore2_lm);
+VSTORE2_LM_MACRO(bfloat16, vstore2_lm_unordered);
+
+template <typename T, typename OT>
+static __device__ inline void do_sin(T* input, OT* output, int len) {
+    float C1 = 2.7557319223985893e-06;    // magic number for taylor compute
+    float32x16_t v0l, v0h;
+    float32x16_t tmp1, tmp2;
+
+    float32x16_t vC3 = {
+            // magic number for taylor compute
+            -0.0001984126984126984,
+            -0.0001984126984126984,
+            -0.0001984126984126984,
+            -0.0001984126984126984,
+            -0.0001984126984126984,
+            -0.0001984126984126984,
+            -0.0001984126984126984,
+            -0.0001984126984126984,
+            -0.0001984126984126984,
+            -0.0001984126984126984,
+            -0.0001984126984126984,
+            -0.0001984126984126984,
+            -0.0001984126984126984,
+            -0.0001984126984126984,
+            -0.0001984126984126984,
+            -0.0001984126984126984,
+    };
+
+    float32x16_t vC5 = {
+            // magic number for taylor compute
+            0.008333333333333333,
+            0.008333333333333333,
+            0.008333333333333333,
+            0.008333333333333333,
+            0.008333333333333333,
+            0.008333333333333333,
+            0.008333333333333333,
+            0.008333333333333333,
+            0.008333333333333333,
+            0.008333333333333333,
+            0.008333333333333333,
+            0.008333333333333333,
+            0.008333333333333333,
+            0.008333333333333333,
+            0.008333333333333333,
+            0.008333333333333333,
+    };
+
+    float32x16_t vC7 = {
+            // magic number for taylor compute
+            -0.16666666666666666,
+            -0.16666666666666666,
+            -0.16666666666666666,
+            -0.16666666666666666,
+            -0.16666666666666666,
+            -0.16666666666666666,
+            -0.16666666666666666,
+            -0.16666666666666666,
+            -0.16666666666666666,
+            -0.16666666666666666,
+            -0.16666666666666666,
+            -0.16666666666666666,
+            -0.16666666666666666,
+            -0.16666666666666666,
+            -0.16666666666666666,
+            -0.16666666666666666,
+    };
+
+    float32x16_t vC9 = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};    // magic number for taylor compute
+
+    for (int ind = 0; ind < len; ind = ind + 32) {
+        int real_len = min(32, len - ind);
+        vload2_lm(input + ind, v0l, v0h);
+        // 把转成float32的数在LM进行处理，使得处于区间[-pi, pi]
+        // x = x - 2*PI*floor((x + PI)/(2*PI))
+        tmp1 = svadd_float32x16(PI, v0l);
+        tmp2 = svadd_float32x16(PI, v0h);
+        tmp1 = svmul_float32x16(PI_2_RECIPROCAL, tmp1);
+        tmp2 = svmul_float32x16(PI_2_RECIPROCAL, tmp2);
+
+        int32x16_t tmp1_int_rd;
+        int32x16_t tmp2_int_rd;
+        tmp1_int_rd = vfloat2fix_rd(tmp1);
+        tmp2_int_rd = vfloat2fix_rd(tmp2);
+        tmp1 = vfix2float(tmp1_int_rd);
+        tmp2 = vfix2float(tmp2_int_rd);
+
+        tmp1 = svmul_float32x16(PI_2, tmp1);
+        tmp2 = svmul_float32x16(PI_2, tmp2);
+        v0l = vvsub_float32x16(v0l, tmp1);
+        v0h = vvsub_float32x16(v0h, tmp2);
+        // 如果x>pi/2, x=pi-x
+        // 如果x< -pi/2, x= -pi -x
+        // 使得所有数都在[-pi/2, pi/2],泰勒展开对这部分比较有效
+        int mask = svle_float32x16(PI / 2, v0l);
+        v0l = svsub_float32x16_mh(PI, v0l, v0l, mask);
+        tmp1 = svmul_float32x16(-1, v0l);
+        mask = svlt_float32x16(PI / 2, tmp1);
+        v0l = svsub_float32x16_mh(-PI, v0l, v0l, mask);
+        //泰勒展开过程
+        tmp1 = vvmul_float32x16(v0l, v0l);
+        tmp2 = svmac_float32x16(C1, tmp1, vC3);
+        tmp2 = vvmac_float32x16(tmp2, tmp1, vC5);
+        tmp2 = vvmac_float32x16(tmp2, tmp1, vC7);
+        tmp2 = vvmac_float32x16(tmp2, tmp1, vC9);
+        v0l = vvmul_float32x16(tmp2, v0l);
+
+        mask = svle_float32x16(PI / 2, v0h);
+        v0h = svsub_float32x16_mh(PI, v0h, v0h, mask);
+        tmp1 = svmul_float32x16(-1, v0h);
+        mask = svlt_float32x16(PI / 2, tmp1);
+        v0h = svsub_float32x16_mh(-PI, v0h, v0h, mask);
+        //泰勒展开过程
+        tmp1 = vvmul_float32x16(v0h, v0h);
+        tmp2 = svmac_float32x16(C1, tmp1, vC3);
+        tmp2 = vvmac_float32x16(tmp2, tmp1, vC5);
+        tmp2 = vvmac_float32x16(tmp2, tmp1, vC7);
+        tmp2 = vvmac_float32x16(tmp2, tmp1, vC9);
+        v0h = vvmul_float32x16(tmp2, v0h);
+        vstore2_lm(output + ind, v0l, v0h);
+    }
+    mfence_lm();
+}
+
+template <typename T, typename OT>
+static __device__ inline void do_cos(T* input, OT* output, int len) {
+    float C1 = 2.7557319223985893e-06;    // magic number for taylor compute
+    float32x16_t v0l, v0h;
+    float32x16_t tmp1, tmp2;
+
+    float32x16_t vC3 = {
+            // magic number for taylor compute
+            -0.0001984126984126984,
+            -0.0001984126984126984,
+            -0.0001984126984126984,
+            -0.0001984126984126984,
+            -0.0001984126984126984,
+            -0.0001984126984126984,
+            -0.0001984126984126984,
+            -0.0001984126984126984,
+            -0.0001984126984126984,
+            -0.0001984126984126984,
+            -0.0001984126984126984,
+            -0.0001984126984126984,
+            -0.0001984126984126984,
+            -0.0001984126984126984,
+            -0.0001984126984126984,
+            -0.0001984126984126984,
+    };
+
+    float32x16_t vC5 = {
+            // magic number for taylor compute
+            0.008333333333333333,
+            0.008333333333333333,
+            0.008333333333333333,
+            0.008333333333333333,
+            0.008333333333333333,
+            0.008333333333333333,
+            0.008333333333333333,
+            0.008333333333333333,
+            0.008333333333333333,
+            0.008333333333333333,
+            0.008333333333333333,
+            0.008333333333333333,
+            0.008333333333333333,
+            0.008333333333333333,
+            0.008333333333333333,
+            0.008333333333333333,
+    };
+
+    float32x16_t vC7 = {
+            // magic number for taylor compute
+            -0.16666666666666666,
+            -0.16666666666666666,
+            -0.16666666666666666,
+            -0.16666666666666666,
+            -0.16666666666666666,
+            -0.16666666666666666,
+            -0.16666666666666666,
+            -0.16666666666666666,
+            -0.16666666666666666,
+            -0.16666666666666666,
+            -0.16666666666666666,
+            -0.16666666666666666,
+            -0.16666666666666666,
+            -0.16666666666666666,
+            -0.16666666666666666,
+            -0.16666666666666666,
+    };
+
+    float32x16_t vC9 = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};    // magic number for taylor compute
+
+    for (int ind = 0; ind < len; ind = ind + 32) {
+        int real_len = min(32, len - ind);
+        vload2_lm(input + ind, v0l, v0h);
+
+        v0l = svadd_float32x16(PI / 2, v0l);
+        v0h = svadd_float32x16(PI / 2, v0h);
+        // 把转成float32的数在LM进行处理，使得处于区间[-pi, pi]
+        // x = x - 2*PI*floor((x + PI)/(2*PI))
+        tmp1 = svadd_float32x16(PI, v0l);
+        tmp2 = svadd_float32x16(PI, v0h);
+        tmp1 = svmul_float32x16(PI_2_RECIPROCAL, tmp1);
+        tmp2 = svmul_float32x16(PI_2_RECIPROCAL, tmp2);
+
+        int32x16_t tmp1_int_rd;
+        int32x16_t tmp2_int_rd;
+        tmp1_int_rd = vfloat2fix_rd(tmp1);
+        tmp2_int_rd = vfloat2fix_rd(tmp2);
+        tmp1 = vfix2float(tmp1_int_rd);
+        tmp2 = vfix2float(tmp2_int_rd);
+
+        tmp1 = svmul_float32x16(PI_2, tmp1);
+        tmp2 = svmul_float32x16(PI_2, tmp2);
+        v0l = vvsub_float32x16(v0l, tmp1);
+        v0h = vvsub_float32x16(v0h, tmp2);
+        // 如果x>pi/2, x=pi-x
+        // 如果x< -pi/2, x= -pi -x
+        // 使得所有数都在[-pi/2, pi/2],泰勒展开对这部分比较有效
+        int mask = svle_float32x16(PI / 2, v0l);
+        v0l = svsub_float32x16_mh(PI, v0l, v0l, mask);
+        tmp1 = svmul_float32x16(-1, v0l);
+        mask = svlt_float32x16(PI / 2, tmp1);
+        v0l = svsub_float32x16_mh(-PI, v0l, v0l, mask);
+        //泰勒展开过程
+        tmp1 = vvmul_float32x16(v0l, v0l);
+        tmp2 = svmac_float32x16(C1, tmp1, vC3);
+        tmp2 = vvmac_float32x16(tmp2, tmp1, vC5);
+        tmp2 = vvmac_float32x16(tmp2, tmp1, vC7);
+        tmp2 = vvmac_float32x16(tmp2, tmp1, vC9);
+        v0l = vvmul_float32x16(tmp2, v0l);
+
+        mask = svle_float32x16(PI / 2, v0h);
+        v0h = svsub_float32x16_mh(PI, v0h, v0h, mask);
+        tmp1 = svmul_float32x16(-1, v0h);
+        mask = svlt_float32x16(PI / 2, tmp1);
+        v0h = svsub_float32x16_mh(-PI, v0h, v0h, mask);
+        //泰勒展开过程
+        tmp1 = vvmul_float32x16(v0h, v0h);
+        tmp2 = svmac_float32x16(C1, tmp1, vC3);
+        tmp2 = vvmac_float32x16(tmp2, tmp1, vC5);
+        tmp2 = vvmac_float32x16(tmp2, tmp1, vC7);
+        tmp2 = vvmac_float32x16(tmp2, tmp1, vC9);
+        v0h = vvmul_float32x16(tmp2, v0h);
+        vstore2_lm(output + ind, v0l, v0h);
+    }
+    mfence_lm();
+}
+
+template <typename T>
+__device__ static inline T* pingpong(T* cur, T* ping, T* pong) {
+    if (cur == ping) {
+        return pong;
+    } else {
+        return ping;
+    }
+}
+
+template <typename T, typename FT>
+static __device__ void do_calc_small_n(T* t_lm_in_ptr, T* t_lm_out_ptr, FT* freqs_sin_lm, FT* freqs_cos_lm, int length) {
+    float32x16_t x1a, x1b, x2a, x2b, cos1a, cos1b, sin1a, sin1b, cos2a, cos2b, sin2a, sin2b;
+    for (int l = 0; l < length / 2; l = l + 32) {
+        vload2_lm_macro(t_lm_in_ptr + l, x1a, x1b);
+        vload2_lm_macro(t_lm_in_ptr + l + length / 2, x2a, x2b);
+        vload2_lm_macro(freqs_sin_lm + l, sin1a, sin1b);
+        vload2_lm_macro(freqs_cos_lm + l, cos1a, cos1b);
+        vload2_lm_macro(freqs_sin_lm + l + length / 2, sin2a, sin2b);
+        vload2_lm_macro(freqs_cos_lm + l + length / 2, cos2a, cos2b);
+        cos1a = vvmul_float32x16(cos1a, x1a);
+        sin1a = vvmul_float32x16(sin1a, x2a);
+        cos1b = vvmul_float32x16(cos1b, x1b);
+        sin1b = vvmul_float32x16(sin1b, x2b);
+        cos2a = vvmul_float32x16(cos2a, x2a);
+        cos2b = vvmul_float32x16(cos2b, x2b);
+        cos1a = vvsub_float32x16(cos1a, sin1a);
+        cos1b = vvsub_float32x16(cos1b, sin1b);
+        vstore2_lm_macro(t_lm_out_ptr + l, cos1a, cos1b);
+        cos2a = vvmac_float32x16(sin2a, x1a, cos2a);
+        cos2b = vvmac_float32x16(sin2b, x1b, cos2b);
+        vstore2_lm_macro(t_lm_out_ptr + l + length / 2, cos2a, cos2b);
+    }
+    mfence_lm();
+}
+
+template <typename T, typename FT>
+__global__ void rotary_pos_emb_forward_with_sincos_4dims_small_n(
+        const T* t,
+        const FT* freqs,
+        T* y,
+        int t_dim0,
+        int t_dim1,
+        int t_dim2,
+        int t_dim3,
+        int t_stride0,
+        int t_stride1,
+        int t_stride2,
+        int t_stride3,
+        int freqs_dim0,
+        int freqs_dim1,
+        int freqs_dim2,
+        int freqs_dim3,
+        int freqs_stride0,
+        int freqs_stride1,
+        int freqs_stride2,
+        int freqs_stride3,
+        int y_stride0,
+        int y_stride1,
+        int y_stride2,
+        int y_stride3) {
+    int cid = core_id();
+    int tid = core_id() * cluster_num() + cluster_id();
+    int nthreads = core_num() * cluster_num();
+    constexpr int READ_MAX_SIZE = 1024 / sizeof(FT);
+    __simd__ T t_lm_in[READ_MAX_SIZE * 2];
+    __simd__ FT freqs_sin_lm[READ_MAX_SIZE];
+    __simd__ FT freqs_cos_lm[READ_MAX_SIZE];
+    __simd__ T t_lm_out[READ_MAX_SIZE * 2];
+    T* t_lm_in_ping = t_lm_in;
+    T* t_lm_in_pong = t_lm_in + READ_MAX_SIZE;
+    T* t_lm_out_ping = t_lm_out;
+    T* t_lm_out_pong = t_lm_out + READ_MAX_SIZE;
+    T* t_lm_in_ptr = t_lm_in_ping;
+    T* t_lm_out_ptr = t_lm_out_ping;
+    int high_dim = freqs_dim0 * freqs_dim1 * freqs_dim2;
+    int t_high_dim = t_dim0 * t_dim1 * t_dim2 / high_dim;
+    for (int i = tid; i < high_dim; i = i + nthreads) {
+        int pos2 = i % freqs_dim2;
+        int pos1 = (i / freqs_dim2) % freqs_dim1;
+        int pos0 = (i / freqs_dim2 / freqs_dim1) % freqs_dim0;
+        int length = min(READ_MAX_SIZE, freqs_dim3);
+        if (freqs_stride3 == 1) {
+            GM2LM_ASYNC(
+                    freqs + pos0 * freqs_stride0 + pos1 * freqs_stride1 + pos2 * freqs_stride2,
+                    freqs_sin_lm,
+                    length * sizeof(FT));
+            // for (int k = 0; k < length / 2; k++) {
+            //     GM2LM_ASYNC(
+            //             freqs + pos0 * freqs_stride0 + pos1 * freqs_stride1 + pos2 * freqs_stride2 + 2 * k,
+            //             freqs_sin_lm + k,
+            //             sizeof(FT));
+            // }
+            // for (int k = 0; k < length / 2; k++) {
+            //     GM2LM_ASYNC(
+            //             freqs + pos0 * freqs_stride0 + pos1 * freqs_stride1 + pos2 * freqs_stride2 + 2 * k + 1,
+            //             freqs_sin_lm + length / 2 + k,
+            //             sizeof(FT));
+            // }
+        } else {
+            for (int k = 0; k < length; k++) {
+                GM2LM_ASYNC(
+                        freqs + pos0 * freqs_stride0 + pos1 * freqs_stride1 + pos2 * freqs_stride2 + k * freqs_stride3,
+                        freqs_sin_lm + k,
+                        sizeof(FT));
+            }
+        }
+        mfence_lm();
+        // if (tid == 693 && i == 7605) {
+        //     printf("pos0:%d, pos1:%d, pos2:%d\n", pos0, pos1, pos2);
+        //     printf("theta0: %f, theta1: %f\n", float(*freqs_sin_lm), float(*(freqs_sin_lm + 1)));
+        // }
+        do_cos<FT, FT>((FT*)freqs_sin_lm, (FT*)freqs_cos_lm, length);
+        do_sin<FT, FT>((FT*)freqs_sin_lm, (FT*)freqs_sin_lm, length);
+        if (t_stride3 == 1) {
+            GM2LM_ASYNC(t + pos0 * t_stride0 + pos1 * t_stride1 + pos2 * t_stride2, t_lm_in_ptr, length * sizeof(T));
+            // for (int m = 0; m < length / 2; m++) {
+            //     GM2LM_ASYNC(
+            //             t + pos0 * t_stride0 + pos1 * t_stride1 + pos2 * t_stride2 + 2 * m * t_stride3,
+            //             t_lm_in_ptr + m,
+            //             sizeof(T));
+            // }
+            // for (int m = 0; m < length / 2; m++) {
+            //     GM2LM_ASYNC(
+            //             t + pos0 * t_stride0 + pos1 * t_stride1 + pos2 * t_stride2 + (2 * m + 1) * t_stride3,
+            //             t_lm_in_ptr + length / 2 + m,
+            //             sizeof(T));
+            // }
+        } else {
+            for (int m = 0; m < length; m++) {
+                GM2LM_ASYNC(
+                        t + pos0 * t_stride0 + pos1 * t_stride1 + pos2 * t_stride2 + m * t_stride3, t_lm_in_ptr + m, sizeof(T));
+            }
+        }
+        for (int k = 0; k < t_high_dim; k++) {
+            int tpos2 = k % (t_dim2 / freqs_dim2) * freqs_dim2 + pos2;
+            int tpos1 = (k / (t_dim2 / freqs_dim2)) % (t_dim1 / freqs_dim1) * freqs_dim1 + pos1;
+            int tpos0 = (k / (t_dim2 / freqs_dim2) / (t_dim1 / freqs_dim1)) % (t_dim0 / freqs_dim0) * freqs_dim0 + pos0;
+            if (k < t_high_dim - 1) {
+                int tpos2_next = (k + 1) % (t_dim2 / freqs_dim2) * freqs_dim2 + pos2;
+                int tpos1_next = ((k + 1) / (t_dim2 / freqs_dim2)) % (t_dim1 / freqs_dim1) * freqs_dim1 + pos1;
+                int tpos0_next
+                        = ((k + 1) / (t_dim2 / freqs_dim2) / (t_dim1 / freqs_dim1)) % (t_dim0 / freqs_dim0) * freqs_dim0 + pos0;
+                if (t_stride3 == 1) {
+                    GM2LM_ASYNC(
+                            t + tpos0_next * t_stride0 + tpos1_next * t_stride1 + tpos2_next * t_stride2,
+                            pingpong(t_lm_in_ptr, t_lm_in_ping, t_lm_in_pong),
+                            length * sizeof(T));
+                    // for (int m = 0; m < length / 2; m++) {
+                    //     GM2LM_ASYNC(
+                    //             t + tpos0_next * t_stride0 + tpos1_next * t_stride1 + tpos2_next * t_stride2 + 2 * m,
+                    //             pingpong(t_lm_in_ptr, t_lm_in_ping, t_lm_in_pong) + m,
+                    //             sizeof(T));
+                    // }
+                    // for (int m = 0; m < length / 2; m++) {
+                    //     GM2LM_ASYNC(
+                    //             t + tpos0_next * t_stride0 + tpos1_next * t_stride1 + tpos2_next * t_stride2 + 2 * m + 1,
+                    //             pingpong(t_lm_in_ptr, t_lm_in_ping, t_lm_in_pong) + length / 2 + m,
+                    //             sizeof(T));
+                    // }
+                } else {
+                    for (int m = 0; m < length; m++) {
+                        GM2LM_ASYNC(
+                                t + tpos0_next * t_stride0 + tpos1_next * t_stride1 + tpos2_next * t_stride2 + m * t_stride3,
+                                pingpong(t_lm_in_ptr, t_lm_in_ping, t_lm_in_pong) + m,
+                                sizeof(T));
+                    }
+                }
+            }
+            mfence_lm();
+            // if (tid == 0 && i == 0 && k == 0) {
+            //     printf("tpos0:%d, tpos1:%d, tpos2:%d\n", tpos0, tpos1, tpos2);
+            //     printf("data0: %f, data1: %f\n", float(*t_lm_in_ptr), float(*(t_lm_in_ptr + 1)));
+            // }
+            do_calc_small_n((T*)t_lm_in_ptr, (T*)t_lm_out_ptr, (FT*)freqs_sin_lm, (FT*)freqs_cos_lm, length);
+            if (y_stride3 == 1) {
+                LM2GM_ASYNC(t_lm_out_ptr, y + tpos0 * y_stride0 + tpos1 * y_stride1 + tpos2 * y_stride2, length * sizeof(T));
+            } else {
+                for (int m = 0; m < length; m++) {
+                    LM2GM_ASYNC(
+                            t_lm_out_ptr + m,
+                            y + tpos0 * y_stride0 + tpos1 * y_stride1 + tpos2 * y_stride2 + m * y_stride3,
+                            sizeof(T));
+                }
+            }
+            t_lm_in_ptr = pingpong(t_lm_in_ptr, t_lm_in_ping, t_lm_in_pong);
+            t_lm_out_ptr = pingpong(t_lm_out_ptr, t_lm_out_ping, t_lm_out_pong);
+        }
+    }
+    mfence_lm();
+    t_high_dim *= high_dim;
+    for (int i = tid; i < t_high_dim; i = i + nthreads) {
+        int length = READ_MAX_SIZE;
+        int pos2 = i % t_dim2;
+        int pos1 = (i / t_dim2) % t_dim1;
+        int pos0 = (i / t_dim2 / t_dim1) % t_dim0;
+        for (int j = freqs_dim3; j < t_dim3; j = j + length) {
+            if (j + length > t_dim3) {
+                length = t_dim3 - j;
+            }
+            if (t_stride3 == 1) {
+                GM2LM_ASYNC(t + pos0 * t_stride0 + pos1 * t_stride1 + pos2 * t_stride2 + j, t_lm_out, length * sizeof(T));
+            } else {
+                for (int m = 0; m < length; m++) {
+                    GM2LM_ASYNC(
+                            t + pos0 * t_stride0 + pos1 * t_stride1 + pos2 * t_stride2 + (j + m) * t_stride3,
+                            t_lm_out + m,
+                            sizeof(T));
+                }
+            }
+            mfence_lm();
+            if (y_stride3 == 1) {
+                LM2GM_ASYNC(t_lm_out, y + pos0 * y_stride0 + pos1 * y_stride1 + pos2 * y_stride2 + j, length * sizeof(T));
+            } else {
+                for (int m = 0; m < length; m++) {
+                    LM2GM_ASYNC(
+                            t_lm_out + m,
+                            y + pos0 * y_stride0 + pos1 * y_stride1 + pos2 * y_stride2 + (j + m) * y_stride3,
+                            sizeof(T));
+                }
+            }
+            mfence_lm();
+        }
+    }
+}

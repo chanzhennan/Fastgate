@@ -409,6 +409,7 @@ def build_for_kunlun():
 
     sources = [
         os.path.join("backend", "kunlun", f"kernels.xpu"),
+        os.path.join("backend", "kunlun", f"rope.xpu"),
         os.path.join("backend", "kunlun", f"lltm.cpp"),
         os.path.join("backend", "kunlun", f"utils.cpp"),
     ]
@@ -418,8 +419,12 @@ def build_for_kunlun():
             name,
             sources=sources,
             library_dirs=["/usr/local/xcudart/lib"],
+            # 头文件路径
             include_dirs=["/ssd3/zhennanc/baidu/xpu/XMLIR/third_party/xhpc/xdnn/include",
-            "/ssd3/zhennanc/baidu/xpu/XMLIR/third_party/xre/include"],
+            "/ssd3/zhennanc/baidu/xpu/XMLIR/third_party/xre/include",
+            "/ssd3/zhennanc/baidu/xpu/XMLIR/xdnn_pytorch/include",
+            "/ssd3/zhennanc/baidu/xpu/XMLIR/runtime/include",
+            "/ssd3/zhennanc/baidu/xpu/XMLIR/third_party/xccl/include/"],
         ),
          
     )

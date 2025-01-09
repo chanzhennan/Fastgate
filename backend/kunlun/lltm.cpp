@@ -1,5 +1,7 @@
 #include <torch/extension.h>
 #include <vector>
+#include "xdnn_pytorch/xdnn_pytorch.h"
+#include "xpu/xpukernel.h"
 
 torch::Tensor d_sigmoid(torch::Tensor z);
 torch::Tensor d_tanh(torch::Tensor z);
@@ -62,7 +64,17 @@ std::vector<torch::Tensor> lltm_backward(
     return {d_old_h, d_input, d_weights, d_bias, d_old_cell};
 }
 
+int rotary_pos_emb(
+        xpukernel::Context* ctx,
+        const xdnn_pytorch::Tensor& t,
+        const xdnn_pytorch::Tensor& freqs,
+        xdnn_pytorch::Tensor& output) {
+    int ret = xdnn_pytorch::rotary_pos_emb_forward(ctx, t, freqs, output);
+    return ret;
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("forward", &lltm_forward, "LLTM forward");
     m.def("backward", &lltm_backward, "LLTM backward");
+    m.def("rotary_forward", &rotary_pos_emb, "rope forward");
 }

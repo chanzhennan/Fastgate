@@ -1,7 +1,12 @@
 #include <torch/extension.h>
 #include <vector>
+
 #include "xdnn_pytorch/xdnn_pytorch.h"
+#include "xdnn_pytorch/xdnn_pytorch_wrapper_check.h"
+#include "xdnn_pytorch/xdnn_pytorch_wrapper_dump.h"
+
 #include "xpu/xpukernel.h"
+#include "rope.h"
 
 torch::Tensor d_sigmoid(torch::Tensor z);
 torch::Tensor d_tanh(torch::Tensor z);
@@ -64,17 +69,16 @@ std::vector<torch::Tensor> lltm_backward(
     return {d_old_h, d_input, d_weights, d_bias, d_old_cell};
 }
 
-int rotary_pos_emb(
-        xpukernel::Context* ctx,
-        const xdnn_pytorch::Tensor& t,
-        const xdnn_pytorch::Tensor& freqs,
-        xdnn_pytorch::Tensor& output) {
-    int ret = xdnn_pytorch::rotary_pos_emb_forward(ctx, t, freqs, output);
-    return ret;
+torch::Tensor rotary_pos_emb_mine(
+        const torch::Tensor& t,
+        const torch::Tensor& freqs,
+        torch::Tensor& output) {
+    impl_rotary_pos_emb_forward_mine(t, freqs, output);
+    return output;
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("forward", &lltm_forward, "LLTM forward");
     m.def("backward", &lltm_backward, "LLTM backward");
-    m.def("rotary_forward", &rotary_pos_emb, "rope forward");
+    m.def("rope", &rotary_pos_emb_mine, "rope forward");
 }

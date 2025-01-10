@@ -286,6 +286,33 @@ __device__ static inline T* pingpong(T* cur, T* ping, T* pong) {
 }
 
 template <typename T, typename FT>
+static __device__ void do_calc(T* t_lm, FT* freqs_sin_lm, FT* freqs_cos_lm, int length, float16 minus_one_fp16) {
+    float32x16_t x1a, x1b, x2a, x2b, cosa, cosb, sina, sinb;
+    for (int l = 0; l < length; l = l + 32) {
+        vload2_lm_macro(t_lm + l, x1a, x1b);
+        vload2_lm_macro(t_lm + l + length, x2a, x2b);
+        vload2_lm_macro(freqs_sin_lm + l, sina, sinb);
+        vload2_lm_macro(freqs_cos_lm + l, cosa, cosb);
+        cosa = vvmul_float32x16(cosa, x1a);
+        sina = vvmul_float32x16(sina, x2a);
+        cosa = vvsub_float32x16(cosa, sina);
+        cosb = vvmul_float32x16(cosb, x1b);
+        sinb = vvmul_float32x16(sinb, x2b);
+        cosb = vvsub_float32x16(cosb, sinb);
+        vstore2_lm_macro(t_lm + l, cosa, cosb);
+        mfence_lm();
+        vload2_lm_macro(freqs_sin_lm + l + length, sina, sinb);
+        vload2_lm_macro(freqs_cos_lm + l + length, cosa, cosb);
+        cosa = vvmul_float32x16(cosa, x2a);
+        cosa = vvmac_float32x16(sina, x1a, cosa);
+        cosb = vvmul_float32x16(cosb, x2b);
+        cosb = vvmac_float32x16(sinb, x1b, cosb);
+        vstore2_lm_macro(t_lm + l + length, cosa, cosb);
+        mfence_lm();
+    }
+}
+
+template <typename T, typename FT>
 static __device__ void do_calc_small_n(T* t_lm_in_ptr, T* t_lm_out_ptr, FT* freqs_sin_lm, FT* freqs_cos_lm, int length) {
     float32x16_t x1a, x1b, x2a, x2b, cos1a, cos1b, sin1a, sin1b, cos2a, cos2b, sin2a, sin2b;
     for (int l = 0; l < length / 2; l = l + 32) {
@@ -312,7 +339,7 @@ static __device__ void do_calc_small_n(T* t_lm_in_ptr, T* t_lm_out_ptr, FT* freq
 }
 
 template <typename T, typename FT>
-__global__ void rotary_pos_emb_forward_with_sincos_4dims_small_n(
+__global__ void rotary_pos_emb_forward_with_sincos_4dims_mine(
         const T* t,
         const FT* freqs,
         T* y,
@@ -336,6 +363,157 @@ __global__ void rotary_pos_emb_forward_with_sincos_4dims_small_n(
         int y_stride1,
         int y_stride2,
         int y_stride3) {
+    int cid = core_id();
+    int tid = core_id() * cluster_num() + cluster_id();
+    int nthreads = core_num() * cluster_num();
+    __simd__ T t_lm[1024 / sizeof(FT)];
+    __simd__ FT freqs_sin_lm[1024 / sizeof(FT)];
+    __simd__ FT freqs_cos_lm[1024 / sizeof(FT)];
+    int high_dim = freqs_dim0 * freqs_dim1 * freqs_dim2;
+    int t_high_dim = t_dim0 * t_dim1 * t_dim2 / high_dim;
+    float16 minus_one_fp16 = float2float16(-1.0f);
+    for (int i = tid; i < high_dim; i = i + nthreads) {
+        int pos2 = i % freqs_dim2;
+        int pos1 = (i / freqs_dim2) % freqs_dim1;
+        int pos0 = (i / freqs_dim2 / freqs_dim1) % freqs_dim0;
+        int length = 512 / sizeof(FT);
+        for (int j = 0; j < freqs_dim3 / 2; j = j + length) {
+            int read_length = min(length, freqs_dim3 / 2 - j);
+            if (freqs_stride3 == 1) {
+                GM2LM_ASYNC(
+                        freqs + pos0 * freqs_stride0 + pos1 * freqs_stride1 + pos2 * freqs_stride2 + j,
+                        freqs_sin_lm,
+                        read_length * sizeof(FT));
+                GM2LM_ASYNC(
+                        freqs + pos0 * freqs_stride0 + pos1 * freqs_stride1 + pos2 * freqs_stride2 + j + freqs_dim3 / 2,
+                        freqs_sin_lm + length,
+                        read_length * sizeof(FT));
+            } else {
+                for (int k = 0; k < read_length; k++) {
+                    GM2LM_ASYNC(
+                            freqs + pos0 * freqs_stride0 + pos1 * freqs_stride1 + pos2 * freqs_stride2 + (j + k) * freqs_stride3,
+                            freqs_sin_lm + k,
+                            sizeof(FT));
+                    GM2LM_ASYNC(
+                            freqs + pos0 * freqs_stride0 + pos1 * freqs_stride1 + pos2 * freqs_stride2
+                                    + (j + freqs_dim3 / 2 + k) * freqs_stride3,
+                            freqs_sin_lm + k + length,
+                            sizeof(FT));
+                }
+            }
+            mfence_lm();
+            do_cos<FT, FT>((FT*)freqs_sin_lm, (FT*)freqs_cos_lm, read_length);
+            do_cos<FT, FT>((FT*)(freqs_sin_lm + length), (FT*)(freqs_cos_lm + length), read_length);
+            do_sin<FT, FT>((FT*)freqs_sin_lm, (FT*)freqs_sin_lm, read_length);
+            do_sin<FT, FT>((FT*)(freqs_sin_lm + length), (FT*)(freqs_sin_lm + length), read_length);
+
+            for (int k = 0; k < t_high_dim; k++) {
+                int tpos2 = k % (t_dim2 / freqs_dim2) * freqs_dim2 + pos2;
+                int tpos1 = (k / (t_dim2 / freqs_dim2)) % (t_dim1 / freqs_dim1) * freqs_dim1 + pos1;
+                int tpos0 = (k / (t_dim2 / freqs_dim2) / (t_dim1 / freqs_dim1)) % (t_dim0 / freqs_dim0) * freqs_dim0 + pos0;
+                if (t_stride3 == 1) {
+                    GM2LM_ASYNC(t + tpos0 * t_stride0 + tpos1 * t_stride1 + tpos2 * t_stride2 + j, t_lm, read_length * sizeof(T));
+                    GM2LM_ASYNC(
+                            t + tpos0 * t_stride0 + tpos1 * t_stride1 + tpos2 * t_stride2 + j + freqs_dim3 / 2,
+                            t_lm + length,
+                            read_length * sizeof(T));
+                } else {
+                    for (int m = 0; m < read_length; m++) {
+                        GM2LM_ASYNC(
+                                t + tpos0 * t_stride0 + tpos1 * t_stride1 + tpos2 * t_stride2 + (j + m) * t_stride3,
+                                t_lm + m,
+                                sizeof(T));
+                        GM2LM_ASYNC(
+                                t + tpos0 * t_stride0 + tpos1 * t_stride1 + tpos2 * t_stride2
+                                        + (j + m + freqs_dim3 / 2) * t_stride3,
+                                t_lm + m + length,
+                                sizeof(T));
+                    }
+                }
+                mfence_lm();
+                do_calc<T, FT>((T*)t_lm, (FT*)freqs_sin_lm, (FT*)freqs_cos_lm, length, minus_one_fp16);
+                if (y_stride3 == 1) {
+                    LM2GM_ASYNC(t_lm, y + tpos0 * y_stride0 + tpos1 * y_stride1 + tpos2 * y_stride2 + j, read_length * sizeof(T));
+                    LM2GM(t_lm + length,
+                          y + tpos0 * y_stride0 + tpos1 * y_stride1 + tpos2 * y_stride2 + j + freqs_dim3 / 2,
+                          read_length * sizeof(T));
+                } else {
+                    for (int m = 0; m < read_length; m++) {
+                        LM2GM_ASYNC(
+                                t_lm + m,
+                                y + tpos0 * y_stride0 + tpos1 * y_stride1 + tpos2 * y_stride2 + (j + m) * y_stride3,
+                                sizeof(T));
+                        LM2GM(t_lm + length + m,
+                              y + tpos0 * y_stride0 + tpos1 * y_stride1 + tpos2 * y_stride2
+                                      + (j + m + freqs_dim3 / 2) * y_stride3,
+                              sizeof(T));
+                    }
+                }
+            }
+        }
+    }
+    t_high_dim *= high_dim;
+    for (int i = tid; i < t_high_dim; i = i + nthreads) {
+        int length = 512 / sizeof(FT);
+        int pos2 = i % t_dim2;
+        int pos1 = (i / t_dim2) % t_dim1;
+        int pos0 = (i / t_dim2 / t_dim1) % t_dim0;
+        for (int j = freqs_dim3; j < t_dim3; j = j + length) {
+            if (j + length > t_dim3) {
+                length = t_dim3 - j;
+            }
+            if (t_stride3 == 1) {
+                GM2LM_ASYNC(t + pos0 * t_stride0 + pos1 * t_stride1 + pos2 * t_stride2 + j, t_lm, length * sizeof(T));
+            } else {
+                for (int m = 0; m < length; m++) {
+                    GM2LM_ASYNC(
+                            t + pos0 * t_stride0 + pos1 * t_stride1 + pos2 * t_stride2 + (j + m) * t_stride3,
+                            t_lm + m,
+                            sizeof(T));
+                }
+            }
+            mfence_lm();
+            if (y_stride3 == 1) {
+                LM2GM_ASYNC(t_lm, y + pos0 * y_stride0 + pos1 * y_stride1 + pos2 * y_stride2 + j, length * sizeof(T));
+            } else {
+                for (int m = 0; m < length; m++) {
+                    LM2GM_ASYNC(
+                            t_lm + m,
+                            y + pos0 * y_stride0 + pos1 * y_stride1 + pos2 * y_stride2 + (j + m) * y_stride3,
+                            sizeof(T));
+                }
+            }
+            mfence_lm();
+        }
+    }
+}
+
+template <typename T, typename FT>
+__global__ void rotary_pos_emb_forward_with_sincos_4dims_small_n_mine(
+        const T* t,
+        const FT* freqs,
+        T* y,
+        int t_dim0,
+        int t_dim1,
+        int t_dim2,
+        int t_dim3,
+        int t_stride0,
+        int t_stride1,
+        int t_stride2,
+        int t_stride3,
+        int freqs_dim0,
+        int freqs_dim1,
+        int freqs_dim2,
+        int freqs_dim3,
+        int freqs_stride0,
+        int freqs_stride1,
+        int freqs_stride2,
+        int freqs_stride3,
+        int y_stride0,
+        int y_stride1,
+        int y_stride2,
+        int y_stride3) {
+    printf("enter kernel");
     int cid = core_id();
     int tid = core_id() * cluster_num() + cluster_id();
     int nthreads = core_num() * cluster_num();

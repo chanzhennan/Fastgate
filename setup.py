@@ -412,19 +412,21 @@ def build_for_kunlun():
         os.path.join("backend", "kunlun", f"rope.xpu"),
         os.path.join("backend", "kunlun", f"lltm.cpp"),
         os.path.join("backend", "kunlun", f"utils.cpp"),
+        os.path.join("backend", "kunlun", f"rope_c_torch.cpp"),
     ]
 
     ext_modules.append(
         XPUExtension(
             name,
             sources=sources,
-            library_dirs=["/usr/local/xcudart/lib"],
+            library_dirs=["/usr/local/xcudart/lib", "/ssd3/zhennanc/baidu/xpu/XMLIR/build/xdnn_pytorch"],
             # 头文件路径
             include_dirs=["/ssd3/zhennanc/baidu/xpu/XMLIR/third_party/xhpc/xdnn/include",
             "/ssd3/zhennanc/baidu/xpu/XMLIR/third_party/xre/include",
             "/ssd3/zhennanc/baidu/xpu/XMLIR/xdnn_pytorch/include",
             "/ssd3/zhennanc/baidu/xpu/XMLIR/runtime/include",
             "/ssd3/zhennanc/baidu/xpu/XMLIR/third_party/xccl/include/"],
+            libraries=["xdnn_pytorch"],
         ),
          
     )

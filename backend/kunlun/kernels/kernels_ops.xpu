@@ -30,7 +30,6 @@ __global__ void sigmoid_backward(float* x, float* x_grad, int length) {
         primitive_mul<float>(-1.0f, grad_local, grad_local, read_len);
         primitive_add<float>(1.0f, grad_local, grad_local, read_len);
         primitive_mul<float>(local, grad_local, grad_local, read_len);
-
         LM2GM(grad_local, x_grad + i, read_len * sizeof(float));
     }
 }

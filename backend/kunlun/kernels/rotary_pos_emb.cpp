@@ -2,22 +2,14 @@
 #include "xdnn_pytorch/xdnn_pytorch_wrapper_check.h"
 #include "xdnn_pytorch/xdnn_pytorch_wrapper_dump.h"
 
-// #include "xpu/refactor/impl/xpukernel_impl.h"
 #include "xpu/xpukernel.h"
 #include "xpu/kernel/xtdk.h"
 #include "xpu/runtime.h"
-#include "rope.h"
 #include <torch/extension.h>
 #include <iostream>
 
+#include "xpu_op.h"
 
-// #define KERNEL_ASSERT_SUCCESS(ctx, ret)                 \
-//     if (!((ret) == XPU_SUCCESS)) {                      \
-//         _log_kernel_fail(ctx, __FILE__, __LINE__, ret); \
-//         return xpytorch::xpu::api::RUNTIME_ERROR;       \
-//     }
-
-// namespace xpukernel = xpytorch::xpu::api;
 
 template <typename T, typename T2>
 __attribute__((global)) __attribute__((weak)) void rotary_pos_emb_forward_with_sincos_4dims_small_n_mine(
@@ -49,13 +41,13 @@ __attribute__((global)) __attribute__((weak)) void rotary_pos_emb_forward_with_s
 // namespace xdnn_pytorch {
 
 // template <typename T, typename T2>
-void impl_rotary_pos_emb_forward_mine(const torch::Tensor &t, const torch::Tensor &freqs, torch::Tensor &out) {
+void impl_rotary_pos_emb_forward(const torch::Tensor &t, const torch::Tensor &freqs, torch::Tensor &out) {
     // xpukernel::ctx_guard RAII_GUARD(ctx);
     // WRAPPER_DEFINE_MOCK_OF_3TENSORS(ctx, t, freqs, out);
     // WRAPPER_BEGIN_CONTIGUOUS_ATTR_OF_1TENSOR(ctx, freqs);
-    at::Half* t_ptr = t.data_ptr<at::Half>();
-    float* freqs_ptr = freqs.data_ptr<float>();
-    at::Half* out_ptr = out.data_ptr<at::Half>();
+    float16* t_ptr = reinterpret_cast<float16 *>(t.data_ptr<at::Half>());
+    float* freqs_ptr = reinterpret_cast< float *>(freqs.data_ptr<float>());
+    float16* out_ptr = reinterpret_cast<float16 *>(out.data_ptr<at::Half>());
     
     int64_t ndim = t.ndimension();
     std::vector<int64_t> t_shape(ndim);
@@ -117,13 +109,13 @@ void impl_rotary_pos_emb_forward_mine(const torch::Tensor &t, const torch::Tenso
     }
     // if (ctx->dev().type() == xpukernel::kXPU3) {
     // auto func = rotary_pos_emb_forward_with_sincos_4dims;
-    // if (freqs_dim[3] * sizeof(T) <= 1024 && freqs_dim[3] % 64 == 0) {
+    // if (freqs_dim[3] * sizeof(float16) <= 1024 && freqs_dim[3] % 64 == 0) {
     std::cout << "t_dim: " << t_dim[0] << " " << t_dim[1] << " " << t_dim[2] << " " << t_dim[3] << std::endl;
     std::cout << "t_strd: " << t_strd[0] << " " << t_strd[1] << " " << t_strd[2] << " " << t_strd[3] << std::endl;
     std::cout << "freqs_dim: " << freqs_dim[0] << " " << freqs_dim[1] << " " << freqs_dim[2] << " " << freqs_dim[3] << std::endl;
     std::cout << "freqs_strd: " << freqs_strd[0] << " " << freqs_strd[1] << " " << freqs_strd[2] << " " << freqs_strd[3] << std::endl;
     std::cout << "y_strd: " << y_strd[0] << " " << y_strd[1] << " " << y_strd[2] << " " << y_strd[3] << std::endl;
-    auto func = rotary_pos_emb_forward_with_sincos_4dims_small_n_mine<at::Half, float>;
+    auto func = rotary_pos_emb_forward_with_sincos_4dims_small_n_mine<float16, float>;
     // }
     std::cout << "enter3" << std::endl;
     func<<<12, 64>>>(
@@ -156,14 +148,3 @@ void impl_rotary_pos_emb_forward_mine(const torch::Tensor &t, const torch::Tenso
     // }
     std::cout << "exit" << std::endl;
 }
-
-// int rotary_pos_emb_forward_mine(PYTORCH_TYPES_AND_ARGS) {
-//     WRAPPER_DUMP_INTERFACE(ctx, "rotary_pos_emb_forward");
-//     REGISTER_PYTORCH_2TYPES(t, freqs, ScalarType::kbfloat16, ScalarType::kfloat32, impl_rotary_pos_emb_forward);
-//     REGISTER_PYTORCH_2TYPES(t, freqs, ScalarType::kfloat16, ScalarType::kfloat32, impl_rotary_pos_emb_forward);
-//     REGISTER_PYTORCH_2TYPES(t, freqs, ScalarType::kfloat32, ScalarType::kfloat32, impl_rotary_pos_emb_forward);
-//     REGISTER_PYTORCH_2TYPES(t, freqs, ScalarType::kfloat16, ScalarType::kfloat16, impl_rotary_pos_emb_forward);
-//     REGISTER_PYTORCH_2TYPES(t, freqs, ScalarType::kbfloat16, ScalarType::kbfloat16, impl_rotary_pos_emb_forward);
-//     WRAPPER_UNIMPLEMENTED_TYPE(ctx, t);
-// }
-// }

@@ -408,13 +408,13 @@ def build_for_cuda():
 def build_for_kunlun():
 
     sources = [
-        os.path.join("backend", "kunlun", f"kernels.xpu"),
-        os.path.join("backend", "kunlun", f"rope.xpu"),
-        os.path.join("backend", "kunlun", f"lltm.cpp"),
-        os.path.join("backend", "kunlun", f"utils.cpp"),
-        os.path.join("backend", "kunlun", f"rope_c_torch.cpp"),
+        os.path.join("backend", f"pybind.cpp"),
+        os.path.join("backend", "kunlun", "kernels", "kernels_ops.xpu"),
+        os.path.join("backend", "kunlun", "kernels", "kernels.cpp"),
+        os.path.join("backend", "kunlun", "kernels", "rotary_pos_emb_ops.xpu"),
+        os.path.join("backend", "kunlun", "kernels", "rotary_pos_emb.cpp"),
+        os.path.join("backend", "kunlun", "fused_op.cpp"),
     ]
-
     ext_modules.append(
         XPUExtension(
             name,
@@ -425,8 +425,13 @@ def build_for_kunlun():
             "/ssd3/zhennanc/baidu/xpu/XMLIR/third_party/xre/include",
             "/ssd3/zhennanc/baidu/xpu/XMLIR/xdnn_pytorch/include",
             "/ssd3/zhennanc/baidu/xpu/XMLIR/runtime/include",
-            "/ssd3/zhennanc/baidu/xpu/XMLIR/third_party/xccl/include/"],
+            "/ssd3/zhennanc/baidu/xpu/XMLIR/third_party/xccl/include/"
+            "/ssd3/zhennanc/Speedgate_czn/backend/kunlun"],
             libraries=["xdnn_pytorch"],
+            extra_compile_args = {
+                "cxx" : ['-DBUILD_WITH_KUNLUN'],
+                "xpu" : ['-DBUILD_WITH_KUNLUN'],
+            }
         ),
          
     )
@@ -438,7 +443,7 @@ if BUILD_TARGET == "auto":
 else:
     if BUILD_TARGET == "cuda":
         build_for_cuda()
-    elif BUILD_TARGET == "kunlun":
+    elif BUILD_TARGET == "kunlun" and IS_KUNLUN_EXTENSION:
         build_for_kunlun()
 
 setup(

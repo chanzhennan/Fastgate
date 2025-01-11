@@ -2,6 +2,7 @@
 #include "xpu/runtime.h"
 #include <iostream>
 #include <torch/extension.h>
+#include "xpu_op.h"
 
 __global__ void sigmoid_backward(float* x, float* x_grad, int length);
 

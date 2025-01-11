@@ -513,7 +513,7 @@ __global__ void rotary_pos_emb_forward_with_sincos_4dims_small_n_mine(
         int y_stride1,
         int y_stride2,
         int y_stride3) {
-    printf("enter kernel");
+    printf("enter kernel\n");
     int cid = core_id();
     int tid = core_id() * cluster_num() + cluster_id();
     int nthreads = core_num() * cluster_num();
@@ -678,3 +678,64 @@ __global__ void rotary_pos_emb_forward_with_sincos_4dims_small_n_mine(
         }
     }
 }
+
+#define _XPU_DEF__ROTARY_POS_EMB_FORWARD_WITH_SINCOS_4DIMS_(IDTYPE, FDTYPE)            \
+    template __global__ void rotary_pos_emb_forward_with_sincos_4dims_mine<IDTYPE, FDTYPE>( \
+            const IDTYPE*,                                                             \
+            const FDTYPE*,                                                             \
+            IDTYPE*,                                                                   \
+            int,                                                                       \
+            int,                                                                       \
+            int,                                                                       \
+            int,                                                                       \
+            int,                                                                       \
+            int,                                                                       \
+            int,                                                                       \
+            int,                                                                       \
+            int,                                                                       \
+            int,                                                                       \
+            int,                                                                       \
+            int,                                                                       \
+            int,                                                                       \
+            int,                                                                       \
+            int,                                                                       \
+            int,                                                                       \
+            int,                                                                       \
+            int,                                                                       \
+            int,                                                                       \
+            int);
+_XPU_DEF__ROTARY_POS_EMB_FORWARD_WITH_SINCOS_4DIMS_(float, float);
+_XPU_DEF__ROTARY_POS_EMB_FORWARD_WITH_SINCOS_4DIMS_(float16, float16);
+_XPU_DEF__ROTARY_POS_EMB_FORWARD_WITH_SINCOS_4DIMS_(float16, float);
+_XPU_DEF__ROTARY_POS_EMB_FORWARD_WITH_SINCOS_4DIMS_(bfloat16, bfloat16);
+_XPU_DEF__ROTARY_POS_EMB_FORWARD_WITH_SINCOS_4DIMS_(bfloat16, float);
+#define _XPU_DEF__ROTARY_POS_EMB_FORWARD_WITH_SINCOS_4DIMS_SMALL_N_(IDTYPE, FDTYPE)            \
+    template __global__ void rotary_pos_emb_forward_with_sincos_4dims_small_n_mine<IDTYPE, FDTYPE>( \
+            const IDTYPE*,                                                                     \
+            const FDTYPE*,                                                                     \
+            IDTYPE*,                                                                           \
+            int,                                                                               \
+            int,                                                                               \
+            int,                                                                               \
+            int,                                                                               \
+            int,                                                                               \
+            int,                                                                               \
+            int,                                                                               \
+            int,                                                                               \
+            int,                                                                               \
+            int,                                                                               \
+            int,                                                                               \
+            int,                                                                               \
+            int,                                                                               \
+            int,                                                                               \
+            int,                                                                               \
+            int,                                                                               \
+            int,                                                                               \
+            int,                                                                               \
+            int,                                                                               \
+            int);
+_XPU_DEF__ROTARY_POS_EMB_FORWARD_WITH_SINCOS_4DIMS_SMALL_N_(float, float);
+_XPU_DEF__ROTARY_POS_EMB_FORWARD_WITH_SINCOS_4DIMS_SMALL_N_(float16, float16);
+_XPU_DEF__ROTARY_POS_EMB_FORWARD_WITH_SINCOS_4DIMS_SMALL_N_(float16, float);
+_XPU_DEF__ROTARY_POS_EMB_FORWARD_WITH_SINCOS_4DIMS_SMALL_N_(bfloat16, bfloat16);
+_XPU_DEF__ROTARY_POS_EMB_FORWARD_WITH_SINCOS_4DIMS_SMALL_N_(bfloat16, float);
